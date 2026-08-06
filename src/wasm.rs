@@ -470,6 +470,68 @@ pub extern "C" fn fml_tornado(period: i32, rel: f64) -> i32 {
     }
 }
 
+/// "Explain this number" for one cell (input buffer: "name|member";
+/// period -1 = scalar): definition site routed to the owning file, the
+/// match/actuals arm that fired, and direct dependency cells with values.
+#[no_mangle]
+pub extern "C" fn fml_explain(period: i32) -> i32 {
+    let raw = unsafe { String::from_utf8_lossy(&INPUT_BUF).to_string() };
+    let (name, member) = match raw.split_once('|') {
+        Some((n, m)) if !m.is_empty() => (n.to_string(), Some(m.to_string())),
+        _ => (raw, None),
+    };
+    let session = unsafe {
+        match SESSION.as_mut() {
+            Some(s) => s,
+            None => {
+                set_result("{\"ok\":false,\"error\":\"no model loaded\"}".into());
+                return 1;
+            }
+        }
+    };
+    let p = if period < 0 { None } else { Some(period as usize) };
+    match session.explain(&name, member.as_deref(), p) {
+        Ok(ex) => {
+            let mut out = format!(
+                "{{\"ok\":true,\"name\":\"{}\",\"member\":\"{}\",\"period\":{},\"label\":\"{}\",\"value\":{},\"unit\":\"{}\",\"input\":{},\"file\":\"{}\",\"line\":{},\"arm\":\"{}\",\"note\":\"{}\",\"deps\":[",
+                json_escape(&ex.name),
+                json_escape(&ex.member),
+                ex.period.map(|t| t.to_string()).unwrap_or_else(|| "null".into()),
+                ex.period.map(|t| session.checked.calendar.label(t)).unwrap_or_default(),
+                json_num(ex.value),
+                json_escape(&ex.unit),
+                ex.is_input,
+                json_escape(&ex.file),
+                ex.line,
+                json_escape(&ex.arm),
+                json_escape(&ex.note),
+            );
+            for (k, d) in ex.deps.iter().enumerate() {
+                if k > 0 {
+                    out.push(',');
+                }
+                out.push_str(&format!(
+                    "{{\"name\":\"{}\",\"member\":\"{}\",\"t\":{},\"label\":\"{}\",\"value\":{},\"input\":{},\"via\":\"{}\"}}",
+                    json_escape(&d.name),
+                    json_escape(&d.member),
+                    d.period.map(|t| t.to_string()).unwrap_or_else(|| "null".into()),
+                    json_escape(&d.label),
+                    json_num(d.value),
+                    d.is_input,
+                    json_escape(&d.via),
+                ));
+            }
+            out.push_str("]}");
+            set_result(out);
+            0
+        }
+        Err(e) => {
+            set_result(format!("{{\"ok\":false,\"error\":\"{}\"}}", json_escape(&e)));
+            1
+        }
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn fml_recalc() -> i32 {
     let session = unsafe {

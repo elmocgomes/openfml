@@ -57,7 +57,23 @@
   .pass::before { content:"✓ "; color:var(--ok); } .fail::before { content:"✗ "; color:var(--bad); }
   #scalars span { margin-right:1.2rem; opacity:.9; }
   #tornado { position:fixed; right:1rem; bottom:3rem; background:Canvas; border:1px solid var(--edge);
-    border-radius:8px; padding:.6rem .9rem; box-shadow:0 4px 18px rgba(0,0,0,.25); max-width:420px; z-index:5; }
+    border-radius:8px; padding:.6rem .9rem; box-shadow:0 4px 18px rgba(0,0,0,.25); max-width:420px; z-index:6; }
+  #inspect { position:fixed; right:1rem; bottom:3rem; background:Canvas; border:1px solid var(--edge);
+    border-radius:8px; padding:.6rem .9rem; box-shadow:0 4px 18px rgba(0,0,0,.25);
+    max-width:440px; max-height:60vh; overflow:auto; z-index:5; }
+  #inspect h3 { margin:.15rem 0 .3rem; font-size:.92rem; }
+  #inspect .crumb { font-size:.78rem; opacity:.75; margin-bottom:.15rem; }
+  #inspect .meta { font-size:.78rem; opacity:.8; margin:.1rem 0; }
+  #inspect .dep { display:flex; gap:.5rem; align-items:baseline; font-size:.82rem;
+    padding:.12rem 0; border-top:1px dashed var(--dim); }
+  #inspect .dep .dv { margin-left:auto; font-weight:600; }
+  #inspect .via { font-size:.72em; border:1px solid var(--edge); border-radius:8px;
+    padding:0 .35em; opacity:.7; }
+  #inspect a { color:var(--accent); text-decoration:none; }
+  #inspect .close { float:right; cursor:pointer; opacity:.6; }
+  #inspect button { font:inherit; font-size:.8rem; margin-top:.4rem; padding:.15rem .55rem;
+    border:1px solid var(--edge); background:transparent; border-radius:5px; cursor:pointer; }
+  td.hl { outline:2px solid var(--accent); outline-offset:-2px; }
   #tornado h3 { margin:.1rem 0 .5rem; font-size:.9rem; }
   #tornado .bar { display:grid; grid-template-columns: 150px 1fr; gap:.5rem; align-items:center;
     font-size:.8rem; margin:.15rem 0; }
@@ -258,7 +274,7 @@ function render(r) {
       } else {
         const changed = prev[s.name] && prev[s.name][t] !== v;
         const torn = !SERVER && !inScen && inRange && !s.input ? " torn" : "";
-        const tdata = torn ? ` data-tkey="${s.key}" data-tmember="${s.member || ""}" data-tt="${t}" title="click: tornado sensitivity ±10%"` : "";
+        const tdata = torn ? ` data-tkey="${s.key}" data-tmember="${s.member || ""}" data-tt="${t}" title="click: explain this number"` : "";
         html += `<td class="${changed ? "chg" : ""}${inRange ? "" : " out"}${torn}"${tdata}>${fmt(v)}</td>`;
       }
     });
@@ -274,13 +290,7 @@ function render(r) {
     `<span>${s.name} = <b>${fmt(s.val)}</b><span class="unit">${s.unit}</span></span>`).join("");
   document.querySelectorAll("td.torn").forEach(td => {
     td.addEventListener("click", () => {
-      writeInput(td.dataset.tmember ? td.dataset.tkey + "|" + td.dataset.tmember : td.dataset.tkey);
-      const t0 = performance.now();
-      if (exports.fml_tornado(Number(td.dataset.tt), 0.10) !== 0) { setErr(readResult().error); return; }
-      const r2 = readResult();
-      const us = (performance.now() - t0) * 1000;
-      const cellName = td.dataset.tmember ? `${td.dataset.tkey}[${td.dataset.tmember}]` : td.dataset.tkey;
-      showTornado(cellName + " @ " + document.querySelectorAll("#tbl thead th")[Number(td.dataset.tt) + 1].textContent, r2.bars, us);
+      inspect(td.dataset.tkey, td.dataset.tmember || "", Number(td.dataset.tt), false);
     });
   });
   document.querySelectorAll("td input").forEach(inp => {
@@ -405,6 +415,100 @@ if (SERVER) {
     } catch (e) { /* server away; keep last state */ }
   }, 1500);
   throw new Error("client-mode boot complete"); // skip local-wasm init below
+}
+// ---- "explain this number": provenance inspector with drill-down ----
+let inspectStack = [];
+const cellDisplay = (name, member) => member ? `${name}[${member}]` : name;
+function clearHl() { document.querySelectorAll("td.hl").forEach(td => td.classList.remove("hl")); }
+function highlightDeps(deps) {
+  clearHl();
+  const rows = [...document.querySelectorAll("#tbl tbody tr")];
+  for (const d of deps) {
+    if (d.t === null) continue;
+    const disp = cellDisplay(d.name, d.member);
+    const row = rows.find(tr => tr.children[0].getAttribute("title") === disp);
+    const td = row && row.children[d.t + 1];
+    if (td) td.classList.add("hl");
+  }
+}
+function gotoDef(file, line) {
+  const key = file === "main" || file === "model" ? mainFile() : file;
+  if (fileTexts[key] !== undefined && key !== activeFile) {
+    activeFile = key;
+    srcBox.value = fileTexts[key];
+    renderTabs();
+    updateDraftState();
+  }
+  const lh = parseFloat(getComputedStyle(srcBox).lineHeight) || 19;
+  srcBox.scrollTop = Math.max(0, (line - 2) * lh);
+  const lines = srcBox.value.split("\n");
+  const start = lines.slice(0, line - 1).join("\n").length + (line > 1 ? 1 : 0);
+  srcBox.setSelectionRange(start, start + (lines[line - 1] || "").length);
+  srcBox.focus();
+}
+function inspect(key, member, t, drill) {
+  writeInput(member ? key + "|" + member : key);
+  if (exports.fml_explain(t === null ? -1 : Number(t)) !== 0) { setErr(readResult().error); return; }
+  const ex = readResult();
+  if (!drill) inspectStack = [];
+  inspectStack.push(ex);
+  renderInspect();
+}
+function renderInspect() {
+  document.getElementById("tornado")?.remove();
+  document.getElementById("inspect")?.remove();
+  const ex = inspectStack[inspectStack.length - 1];
+  const div = document.createElement("div");
+  div.id = "inspect";
+  const crumb = inspectStack.length > 1
+    ? '<div class="crumb">' + inspectStack.map((s, i) =>
+        i === inspectStack.length - 1
+          ? `<b>${cellDisplay(s.name, s.member)}</b>`
+          : `<a href="#" data-i="${i}">${cellDisplay(s.name, s.member)}</a>`).join(" › ") + "</div>"
+    : "";
+  const period = ex.period === null ? "" : " @ " + ex.label;
+  const depRows = ex.deps.map((d, i) => {
+    const via = d.via ? `<span class="via">${d.via}</span>` : "";
+    const at = d.t !== null ? " @ " + d.label : (d.label ? " @ " + d.label : "");
+    const tag = d.input ? ' <span class="via">input</span>' : "";
+    return `<div class="dep">${via}<a href="#" data-d="${i}">${cellDisplay(d.name, d.member)}${at}</a>${tag}<span class="dv">${fmt(d.value)}</span></div>`;
+  }).join("") || '<div class="dep" style="opacity:.6">no dependencies — a source value</div>';
+  div.innerHTML = `<span class="close">✕</span>${crumb}
+    <h3>${cellDisplay(ex.name, ex.member)}${period} = ${fmt(ex.value)} <span class="unit">${ex.unit}</span></h3>
+    <div class="meta">defined in <a href="#" id="goDef">${ex.file === "main" || ex.file === "model" ? mainFile() : ex.file}:${ex.line}</a>${ex.arm ? " · " + ex.arm : ""}</div>
+    ${ex.note ? `<div class="meta">${ex.note}</div>` : ""}
+    ${depRows}
+    ${!ex.input && ex.period !== null ? '<button id="tornBtn">tornado ±10%</button>' : ""}`;
+  document.body.appendChild(div);
+  div.querySelector(".close").addEventListener("click", () => {
+    div.remove();
+    document.getElementById("tornado")?.remove();
+    clearHl();
+    inspectStack = [];
+  });
+  div.querySelectorAll("a[data-i]").forEach(a => a.addEventListener("click", e => {
+    e.preventDefault();
+    inspectStack = inspectStack.slice(0, Number(a.dataset.i) + 1);
+    renderInspect();
+  }));
+  div.querySelectorAll("a[data-d]").forEach(a => a.addEventListener("click", e => {
+    e.preventDefault();
+    const d = ex.deps[Number(a.dataset.d)];
+    inspect(d.name, d.member || "", d.t, true);
+  }));
+  div.querySelector("#goDef").addEventListener("click", e => {
+    e.preventDefault();
+    gotoDef(ex.file, ex.line);
+  });
+  const tb = div.querySelector("#tornBtn");
+  if (tb) tb.addEventListener("click", () => {
+    writeInput(ex.member ? ex.name + "|" + ex.member : ex.name);
+    const t0 = performance.now();
+    if (exports.fml_tornado(ex.period, 0.10) !== 0) { setErr(readResult().error); return; }
+    showTornado(cellDisplay(ex.name, ex.member) + " @ " + ex.label, readResult().bars,
+      (performance.now() - t0) * 1000);
+  });
+  highlightDeps(ex.deps);
 }
 function showTornado(title, bars, us) {
   document.getElementById("tornado")?.remove();

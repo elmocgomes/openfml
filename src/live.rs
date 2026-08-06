@@ -8,10 +8,48 @@
 //! taxonomy this is a topological scheduler with a dirty-bit rebuilder plus
 //! early cutoff — the option Excel never took.
 
-use crate::ast::{Body, LitKind};
-use crate::check::{Checked, Step};
+use crate::ast::{Body, Expr, FirstLast, LitKind};
+use crate::check::{Checked, Dist, MUnit, Step, UNBOUND};
 use crate::eval::{self, AssertResult, Values};
 use std::collections::HashSet;
+
+/// One direct dependency cell of an explained value.
+#[derive(Clone, Debug)]
+pub struct Dep {
+    pub name: String,
+    /// Member label ("" for undimensioned).
+    pub member: String,
+    /// Referenced period slot (None for scalars / init values).
+    pub period: Option<usize>,
+    /// Human label: a period, "init", …
+    pub label: String,
+    pub value: f64,
+    pub is_input: bool,
+    /// How the reference reaches the cell: "", "prev", "init", "sum",
+    /// "window", "rollup", "npv", "rate", "irr", "at".
+    pub via: String,
+}
+
+/// "Explain this number": where a cell is defined (routed to the owning
+/// file), which match/actuals arm fired, and the direct dependency cells
+/// with their values — the provenance layer, one drill-down step at a time.
+#[derive(Clone, Debug)]
+pub struct Explanation {
+    pub name: String,
+    pub member: String,
+    pub period: Option<usize>,
+    pub value: f64,
+    pub unit: String,
+    pub is_input: bool,
+    /// Owning file and 1-based line of the definition (via the source map).
+    pub file: String,
+    pub line: usize,
+    /// The match/actuals arm that fired for this period/member, if any.
+    pub arm: String,
+    /// Nature notes: distribution, solve membership, literal editability.
+    pub note: String,
+    pub deps: Vec<Dep>,
+}
 
 #[derive(Clone, Debug)]
 pub struct SimResult {
@@ -732,5 +770,378 @@ impl Session {
             0
         };
         Ok(self.values[m][mb][slot])
+    }
+
+    /// Map a 1-based line of the flat source to (owning file, local line)
+    /// through the include source map.
+    pub fn locate_line(&self, line: usize) -> (String, usize) {
+        let mut off = 0usize;
+        for (i, l) in self.src.split_inclusive('\n').enumerate() {
+            if i + 1 == line {
+                break;
+            }
+            off += l.len();
+        }
+        for s in &self.segments {
+            if off >= s.flat_start && off < s.flat_end {
+                let local = s.local_start + (off - s.flat_start);
+                let lline = self.files[s.file].text[..local].matches('\n').count() + 1;
+                return (self.files[s.file].name.clone(), lline);
+            }
+        }
+        (self.files[0].name.clone(), line)
+    }
+
+    /// "Explain this number": the provenance of one cell — where it is
+    /// defined (routed to the owning file), which match/actuals arm fired
+    /// for this period, and every direct dependency cell with its value.
+    /// Drill-down = calling explain again on a dependency.
+    pub fn explain(
+        &mut self,
+        name: &str,
+        member: Option<&str>,
+        period: Option<usize>,
+    ) -> Result<Explanation, String> {
+        let m = *self
+            .checked
+            .index
+            .get(name)
+            .ok_or_else(|| format!("unknown measure '{name}'"))?;
+        let mi = &self.checked.measures[m];
+        let mb = match (mi.dims.len(), member) {
+            (0, _) => 0,
+            (1, Some(mm)) => {
+                let (dim, idx) = *self
+                    .checked
+                    .member_lookup
+                    .get(mm)
+                    .ok_or_else(|| format!("unknown member '{mm}'"))?;
+                if dim != mi.dims[0] {
+                    return Err(format!("member '{mm}' is not in '{name}''s dimension"));
+                }
+                idx
+            }
+            (1, None) => return Err(format!("'{name}' is dimensioned — give a member")),
+            _ => return Err(format!("multi-dimension '{name}' cannot be explained via this API yet")),
+        };
+        let is_series = mi.is_series;
+        let slot = if is_series {
+            period.ok_or_else(|| format!("'{name}' is a series — give a period index"))?
+        } else {
+            0
+        };
+        let t = if is_series { slot } else { mi.range.0 };
+        let value = self.values[m][mb][slot];
+        let unit = match &mi.munit {
+            MUnit::Uniform(u) => format!("{u}"),
+            MUnit::Local => "local".to_string(),
+        };
+        let member_label = if mi.dims.len() == 1 { self.checked.tuple_label(m, mb) } else { String::new() };
+        let is_input = mi.is_input;
+        let line = mi.line;
+        let (file, local_line) = self.locate_line(line);
+
+        let mut notes: Vec<String> = Vec::new();
+        if let Some(d) = &mi.dist {
+            let base = match d {
+                Dist::Metalog { .. } => format!("~ metalog · median {:.4}", d.median()),
+                Dist::Uniform { a, b } => format!("~ uniform({a}, {b})"),
+                Dist::Normal { mu, sd } => format!("~ normal({mu}, {sd})"),
+            };
+            let freq = if mi.dist_per_period { "fresh draw each period" } else { "one draw per trial" };
+            notes.push(format!("{base} · {freq} · deterministic base uses the median"));
+            for &(a, b, rho) in &self.checked.correlations {
+                if a == m || b == m {
+                    let other = if a == m { b } else { a };
+                    notes.push(format!("correlated {rho} with '{}'", self.checked.measures[other].name));
+                }
+            }
+        }
+        if let Some(s) = mi.solve {
+            notes.push(format!("computed inside solve '{}'", self.checked.solves[s].name));
+        }
+        if is_input
+            && self
+                .checked
+                .edit_sites
+                .iter()
+                .any(|(sm, smb, ..)| *sm == m && *smb == mb)
+        {
+            notes.push("literal input — editable in the grid".into());
+        }
+
+        let mut deps = Vec::new();
+        let mut arm = String::new();
+        if !is_input {
+            let asg = self.checked.asg_of_tuple(m, mb);
+            let body = mi.body.clone();
+            if let Body::Expr(e) = &body {
+                self.collect(e, &asg, t, "", &mut deps, &mut arm)?;
+            }
+        }
+        Ok(Explanation {
+            name: name.to_string(),
+            member: member_label,
+            period: if is_series { Some(slot) } else { None },
+            value,
+            unit,
+            is_input,
+            file,
+            line: local_line,
+            arm,
+            note: notes.join(" · "),
+            deps,
+        })
+    }
+
+    fn push_dep(&self, deps: &mut Vec<Dep>, m: usize, mb: usize, period: Option<isize>, via: &str) {
+        let mi = &self.checked.measures[m];
+        let (p, label, value) = if !mi.is_series {
+            (None, String::new(), self.values[m][mb][0])
+        } else {
+            match period {
+                Some(p) if p >= mi.range.0 as isize && p <= mi.range.1 as isize => (
+                    Some(p as usize),
+                    self.checked.calendar.label(p as usize),
+                    self.values[m][mb][p as usize],
+                ),
+                _ => (None, "out of range".to_string(), 0.0),
+            }
+        };
+        let member = if mi.dims.len() == 1 { self.checked.tuple_label(m, mb) } else { String::new() };
+        if deps
+            .iter()
+            .any(|d| d.name == mi.name && d.member == member && d.period == p && d.via == via && d.label == label)
+        {
+            return;
+        }
+        deps.push(Dep {
+            name: mi.name.clone(),
+            member,
+            period: p,
+            label,
+            value,
+            is_input: mi.is_input,
+            via: via.to_string(),
+        });
+    }
+
+    /// Collect the direct dependency cells of the TAKEN branch of `e`.
+    fn collect(
+        &mut self,
+        e: &Expr,
+        asg: &[usize],
+        t: usize,
+        via: &str,
+        deps: &mut Vec<Dep>,
+        arm: &mut String,
+    ) -> Result<(), String> {
+        match e {
+            Expr::Num(_) | Expr::Qty(_, _) | Expr::Pct(_) | Expr::YearT => {}
+            Expr::Ref(name) => {
+                let m = self.checked.index[name];
+                let mb = self.checked.tuple_of(m, asg)?;
+                self.push_dep(deps, m, mb, Some(t as isize), via);
+            }
+            Expr::Prev(name, inline_init) => {
+                let m = self.checked.index[name];
+                let mb = self.checked.tuple_of(m, asg)?;
+                let ts = t as isize - 1;
+                if ts >= self.checked.measures[m].range.0 as isize {
+                    self.push_dep(deps, m, mb, Some(ts), "prev");
+                } else {
+                    // Boundary: the init expression supplies the value.
+                    let init = inline_init
+                        .as_deref()
+                        .cloned()
+                        .or_else(|| self.checked.measures[m].init.clone());
+                    let v = match &init {
+                        Some(ie) => {
+                            let ctx = eval::Ctx { c: &self.checked, values: &mut self.values };
+                            ctx.eval(ie, asg, t)?
+                        }
+                        None => f64::NAN,
+                    };
+                    let mi = &self.checked.measures[m];
+                    let member =
+                        if mi.dims.len() == 1 { self.checked.tuple_label(m, mb) } else { String::new() };
+                    deps.push(Dep {
+                        name: mi.name.clone(),
+                        member,
+                        period: None,
+                        label: "init".to_string(),
+                        value: v,
+                        is_input: mi.is_input,
+                        via: "prev".to_string(),
+                    });
+                }
+            }
+            Expr::MemberIx { name, members } => {
+                let m = self.checked.index[name];
+                let mut asgs = vec![asg.to_vec()];
+                let mut rolled = false;
+                for mname in members {
+                    if let Some(&(dim, idx)) = self.checked.member_lookup.get(mname) {
+                        for a in asgs.iter_mut() {
+                            a[dim] = idx;
+                        }
+                    } else if let Some(&dim) = self.checked.group_lookup.get(mname) {
+                        rolled = true;
+                        let mut next = Vec::new();
+                        for a in &asgs {
+                            for idx in 0..self.checked.dims[dim].members.len() {
+                                let mut a2 = a.clone();
+                                a2[dim] = idx;
+                                next.push(a2);
+                            }
+                        }
+                        asgs = next;
+                    } else {
+                        return Err(format!("unknown member '{mname}'"));
+                    }
+                }
+                let v = if rolled { "rollup" } else { via };
+                for a in &asgs {
+                    let mb = self.checked.tuple_of(m, a)?;
+                    self.push_dep(deps, m, mb, Some(t as isize), v);
+                }
+            }
+            Expr::At { name, bound } => {
+                let m = self.checked.index[name];
+                let mb = self.checked.tuple_of(m, asg)?;
+                let at = self.checked.resolve_bound(bound, t)?;
+                self.push_dep(deps, m, mb, Some(at), "at");
+            }
+            Expr::WindowSum { name, from, to } => {
+                let m = self.checked.index[name];
+                let mb = self.checked.tuple_of(m, asg)?;
+                let a = self.checked.resolve_bound(from, t)?;
+                let b = self.checked.resolve_bound(to, t)?;
+                for at in a..=b {
+                    self.push_dep(deps, m, mb, Some(at), "window");
+                }
+            }
+            Expr::RangeSum { range, body } => {
+                if let Some(did) = self.checked.dim_by_name(range) {
+                    for c in 0..self.checked.dims[did].members.len() {
+                        let mut a = asg.to_vec();
+                        a[did] = c;
+                        self.collect(body, &a, t, "sum", deps, arm)?;
+                    }
+                } else {
+                    let r = self
+                        .checked
+                        .range_of(range)
+                        .ok_or_else(|| format!("unknown period range '{range}'"))?
+                        .clone();
+                    for p in r.start..=r.end {
+                        self.collect(body, asg, p, "sum", deps, arm)?;
+                    }
+                }
+            }
+            Expr::Npv { rate, body, range } => {
+                self.collect(rate, asg, t, "rate", deps, arm)?;
+                let r = self
+                    .checked
+                    .range_of(range)
+                    .ok_or_else(|| format!("unknown period range '{range}'"))?
+                    .clone();
+                for p in r.start..=r.end {
+                    self.collect(body, asg, p, "npv", deps, arm)?;
+                }
+            }
+            Expr::Irr { name, .. } => {
+                let m = self.checked.index[name];
+                let mb = self.checked.tuple_of(m, asg)?;
+                let (r0, r1) = self.checked.measures[m].range;
+                for p in r0..=r1 {
+                    self.push_dep(deps, m, mb, Some(p as isize), "irr");
+                }
+            }
+            Expr::Annualize(x) => self.collect(x, asg, t, via, deps, arm)?,
+            Expr::When { value, pos, range } => {
+                let r = self
+                    .checked
+                    .range_of(range)
+                    .ok_or_else(|| format!("unknown period range '{range}'"))?;
+                let boundary = match pos {
+                    FirstLast::First => r.start,
+                    FirstLast::Last => r.end,
+                };
+                if t == boundary {
+                    self.collect(value, asg, t, via, deps, arm)?;
+                } else if arm.is_empty() {
+                    *arm = format!("when {}({range}): not this period → 0",
+                        if matches!(pos, FirstLast::First) { "first" } else { "last" });
+                }
+            }
+            Expr::MatchT(arms) => {
+                for (set, e2) in arms {
+                    let base = self
+                        .checked
+                        .range_of(&set.base)
+                        .ok_or_else(|| format!("unknown period range '{}'", set.base))?;
+                    let excluded = match &set.minus {
+                        Some(x) => self
+                            .checked
+                            .range_of(x)
+                            .ok_or_else(|| format!("unknown period range '{x}'"))?
+                            .contains(t),
+                        None => false,
+                    };
+                    if base.contains(t) && !excluded {
+                        if arm.is_empty() {
+                            *arm = match &set.minus {
+                                Some(x) => format!("match t → in {} \\ {x}", set.base),
+                                None => format!("match t → in {}", set.base),
+                            };
+                        }
+                        return self.collect(e2, asg, t, via, deps, arm);
+                    }
+                }
+            }
+            Expr::MatchDim { dim, arms, default } => {
+                let did = self
+                    .checked
+                    .dim_by_name(dim)
+                    .ok_or_else(|| format!("unknown dimension '{dim}'"))?;
+                let c = asg[did];
+                if c == UNBOUND {
+                    return Err(format!("match on {dim} outside a {dim}-bound context"));
+                }
+                let mname = self.checked.dims[did].members[c].clone();
+                for (arm_member, e2) in arms {
+                    if *arm_member == mname {
+                        if arm.is_empty() {
+                            *arm = format!("match {dim} → {mname}");
+                        }
+                        return self.collect(e2, asg, t, via, deps, arm);
+                    }
+                }
+                if let Some(def) = default {
+                    if arm.is_empty() {
+                        *arm = format!("match {dim} → else ({mname})");
+                    }
+                    return self.collect(def, asg, t, via, deps, arm);
+                }
+            }
+            Expr::Conv { body, rate, .. } => {
+                self.collect(body, asg, t, via, deps, arm)?;
+                if let Some(r) = rate {
+                    self.collect(r, asg, t, "rate", deps, arm)?;
+                }
+            }
+            Expr::Neg(x) => self.collect(x, asg, t, via, deps, arm)?,
+            Expr::Bin(_, a, b) => {
+                self.collect(a, asg, t, via, deps, arm)?;
+                self.collect(b, asg, t, via, deps, arm)?;
+            }
+            Expr::Call(_, args) => {
+                for a in args {
+                    self.collect(a, asg, t, via, deps, arm)?;
+                }
+            }
+        }
+        Ok(())
     }
 }

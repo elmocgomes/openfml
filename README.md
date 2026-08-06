@@ -233,9 +233,24 @@ The scheduler generalizes to the (measure × member × period) micro-graph.
   correlated 0.7 with growth: January profit is banded (margin
   uncertainty applies to booked months too) while January sales stays
   certain.
+- **Provenance — "explain this number"** (`Session::explain`,
+  `fml_explain`): the research's one-engine thesis made tangible. For any
+  cell: where it is defined — **routed to the owning file** through the
+  include source map ("team_marketing.fml:2") — which `match`/`actuals`
+  arm actually fired for that period ("match t → in m \ closed"), its
+  nature (distribution + correlations, solve membership, literal
+  editability), and every direct dependency cell with its value: `prev`
+  references point at the previous period (or surface the `init` value at
+  the range start), aggregates (`sum`, windows, `npv`, `irr`) list their
+  constituent cells, tree rollups expand to leaves. Clicking a computed
+  cell in the workbench now opens the **inspector**: dependency rows
+  drill down (breadcrumb trail), dep cells highlight in the grid, the
+  definition link jumps the source pane to the owning file and selects
+  the defining line, and the tornado runs from a button inside the panel
+  (`tests/explain.rs`).
 - Still ahead: full lossless CST, salsa memoization, LSP, exact decimals,
   read-side information-flow control, real authentication, goal-seek,
-  allocate primitive, provenance ("explain this number").
+  allocate primitive, quantified provenance shares (semiring weights).
 
 ## Layout
 
