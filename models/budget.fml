@@ -1,0 +1,24 @@
+model demo.budget
+// Multi-owner expense budget: each cost center owns one match arm.
+// Golden pattern for the "filled by different users" workflow.
+
+calendar plan = yearly 2026 .. 2029
+dimension CostCenter = tree { Total -> { Marketing, Engineering, Operations } }
+currency kEUR
+
+input budget_cap : kEUR flow over plan = { 2026: 1_700, 2027: 1_850, 2028: 1_950, 2029: 2_050 }
+
+input expenses : kEUR flow over CostCenter, plan = match CostCenter {
+  Marketing   -> { 2026: 420, 2027: 460, 2028: 500, 2029: 540 }
+  Engineering -> { 2026: 900, 2027: 990, 2028: 1_050, 2029: 1_100 }
+  Operations  -> 315
+}
+
+total_expenses : kEUR flow over plan = expenses[Total]
+headroom : kEUR flow over plan = budget_cap - total_expenses
+
+assert within_envelope over plan : total_expenses <= budget_cap
+
+scenario Squeeze from Base {
+  budget_cap = { 2026: 1_600, 2027: 1_700, 2028: 1_800, 2029: 1_900 }
+}

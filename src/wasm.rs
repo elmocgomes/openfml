@@ -1,0 +1,406 @@
+//! WASM interface — zero-dependency C-ABI for the browser demo.
+//!
+//! Protocol (all strings via the shared input buffer):
+//!   fml_input_ptr(len)  → pointer to write UTF-8 into
+//!   fml_load()          → build a Session from the input buffer + full run;
+//!                         result JSON in the result buffer; returns 0/1
+//!   fml_set(period, v)  → override input named by the input buffer
+//!                         (period -1 = all periods); returns 0/1
+//!   fml_recalc()        → incremental recalc; stats+values JSON; returns 0/1
+//!   fml_result_ptr() / fml_result_len() → read the response
+
+#![allow(static_mut_refs)]
+
+use crate::live::Session;
+
+static mut INPUT_BUF: Vec<u8> = Vec::new();
+static mut RESULT: Vec<u8> = Vec::new();
+static mut SESSION: Option<Session> = None;
+static mut ACTIVE_SCENARIO: Option<String> = None;
+
+fn set_result(s: String) {
+    unsafe {
+        RESULT = s.into_bytes();
+    }
+}
+
+fn json_escape(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+        .replace('\t', "\\t")
+}
+
+fn json_num(v: f64) -> String {
+    if v.is_finite() {
+        format!("{v}")
+    } else {
+        "null".to_string()
+    }
+}
+
+pub fn dump_state(session: &mut Session, stats_json: &str, include_src: bool) -> String {
+    use crate::check::MUnit;
+    let c = &session.checked;
+    let unit_str = |mi: &crate::check::MeasureInfo| -> String {
+        match &mi.munit {
+            MUnit::Uniform(u) => format!("{u}"),
+            MUnit::Local => "local".to_string(),
+        }
+    };
+    let mut out = String::from("{\"ok\":true,");
+    out.push_str(stats_json);
+    let active = unsafe { ACTIVE_SCENARIO.clone() }.unwrap_or_else(|| "Base".to_string());
+    out.push_str(&format!("\"active\":\"{}\",", json_escape(&active)));
+    out.push_str("\"scenarios\":[");
+    for (k, name) in session.scenario_names().iter().enumerate() {
+        if k > 0 {
+            out.push(',');
+        }
+        out.push_str(&format!("\"{}\"", json_escape(name)));
+    }
+    out.push_str("],");
+    out.push_str("\"periods\":[");
+    for t in 0..c.calendar.len {
+        if t > 0 {
+            out.push(',');
+        }
+        out.push_str(&format!("\"{}\"", c.calendar.label(t)));
+    }
+    out.push_str("],\"series\":[");
+    let mut first = true;
+    for (i, mi) in c.measures.iter().enumerate() {
+        for mb in 0..c.tuple_count(i) {
+            if !mi.is_series {
+                continue;
+            }
+            if !first {
+                out.push(',');
+            }
+            first = false;
+            let label = c.tuple_label(i, mb);
+            let display = if label.is_empty() {
+                mi.name.clone()
+            } else {
+                format!("{}[{}]", mi.name, label)
+            };
+            // Editability = literal edit sites exist (grid edits write back
+            // into the source text). "all" = one broadcast literal; a list =
+            // per-period map entries; "none" = formula-defined.
+            let sites: Vec<Option<usize>> = c
+                .edit_sites
+                .iter()
+                .filter(|(sm, smb, _, _, _)| *sm == i && *smb == mb)
+                .map(|(_, _, st, _, _)| *st)
+                .collect();
+            let edit = if sites.is_empty() {
+                "\"none\"".to_string()
+            } else if sites.iter().any(|t| t.is_none()) {
+                "\"all\"".to_string()
+            } else {
+                let ts: Vec<String> = sites.iter().flatten().map(|t| t.to_string()).collect();
+                format!("[{}]", ts.join(","))
+            };
+            let member_field = if mi.dims.len() == 1 {
+                c.tuple_label(i, mb)
+            } else {
+                String::new()
+            };
+            out.push_str(&format!(
+                "{{\"name\":\"{}\",\"key\":\"{}\",\"member\":\"{}\",\"input\":{},\"edit\":{},\"unit\":\"{}\",\"range\":[{},{}],\"vals\":[",
+                json_escape(&display),
+                json_escape(&mi.name),
+                json_escape(&member_field),
+                mi.is_input,
+                edit,
+                json_escape(&unit_str(mi)),
+                mi.range.0,
+                mi.range.1
+            ));
+            for (t, v) in session.values[i][mb].iter().enumerate() {
+                if t > 0 {
+                    out.push(',');
+                }
+                out.push_str(&json_num(*v));
+            }
+            out.push_str("]}");
+        }
+    }
+    out.push_str("],\"scalars\":[");
+    let mut first = true;
+    for (i, mi) in c.measures.iter().enumerate() {
+        for mb in 0..c.tuple_count(i) {
+            if mi.is_series {
+                continue;
+            }
+            if !first {
+                out.push(',');
+            }
+            first = false;
+            out.push_str(&format!(
+                "{{\"name\":\"{}\",\"input\":{},\"unit\":\"{}\",\"val\":{}}}",
+                json_escape(&mi.name),
+                mi.is_input && mi.dims.is_empty(),
+                json_escape(&unit_str(mi)),
+                json_num(session.values[i][mb][0])
+            ));
+        }
+    }
+    out.push_str("],\"asserts\":[");
+    match session.run_asserts() {
+        Ok(asserts) => {
+            for (k, a) in asserts.iter().enumerate() {
+                if k > 0 {
+                    out.push(',');
+                }
+                out.push_str(&format!(
+                    "[\"{}\",{},{}]",
+                    json_escape(&a.name),
+                    a.passed,
+                    json_num(a.max_deviation)
+                ));
+            }
+        }
+        Err(_) => {}
+    }
+    out.push(']');
+    if include_src {
+        out.push_str(&format!(",\"src\":\"{}\"", json_escape(session.source())));
+    }
+    out.push('}');
+    out
+}
+
+#[no_mangle]
+pub extern "C" fn fml_input_ptr(len: usize) -> *mut u8 {
+    unsafe {
+        INPUT_BUF.clear();
+        INPUT_BUF.resize(len, 0);
+        INPUT_BUF.as_mut_ptr()
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn fml_result_ptr() -> *const u8 {
+    unsafe { RESULT.as_ptr() }
+}
+
+#[no_mangle]
+pub extern "C" fn fml_result_len() -> usize {
+    unsafe { RESULT.len() }
+}
+
+#[no_mangle]
+pub extern "C" fn fml_load() -> i32 {
+    let src = unsafe { String::from_utf8_lossy(&INPUT_BUF).to_string() };
+    match Session::new(&src) {
+        Ok(mut s) => match s.run_full() {
+            Ok(stats) => {
+                let stats_json = format!(
+                    "\"steps_run\":{},\"steps_total\":{},\"nodes_changed\":{},",
+                    stats.steps_run, stats.steps_total, stats.nodes_changed
+                );
+                unsafe {
+                    ACTIVE_SCENARIO = None;
+                }
+                let json = dump_state(&mut s, &stats_json, false);
+                unsafe {
+                    SESSION = Some(s);
+                }
+                set_result(json);
+                0
+            }
+            Err(e) => {
+                set_result(format!("{{\"ok\":false,\"error\":\"{}\"}}", json_escape(&e)));
+                1
+            }
+        },
+        Err(e) => {
+            set_result(format!("{{\"ok\":false,\"error\":\"{}\"}}", json_escape(&e)));
+            1
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn fml_set(period: i32, value: f64) -> i32 {
+    let name = unsafe { String::from_utf8_lossy(&INPUT_BUF).to_string() };
+    let session = unsafe {
+        match SESSION.as_mut() {
+            Some(s) => s,
+            None => {
+                set_result("{\"ok\":false,\"error\":\"no model loaded\"}".into());
+                return 1;
+            }
+        }
+    };
+    let p = if period < 0 { None } else { Some(period as usize) };
+    match session.set_input(&name, None, p, value) {
+        Ok(()) => 0,
+        Err(e) => {
+            set_result(format!("{{\"ok\":false,\"error\":\"{}\"}}", json_escape(&e)));
+            1
+        }
+    }
+}
+
+/// Grid → text write-back: patch the literal defining the named input in
+/// the SOURCE, apply the change incrementally, and return state + the new
+/// source text (so the editor pane stays in sync).
+#[no_mangle]
+pub extern "C" fn fml_patch(period: i32, value: f64) -> i32 {
+    let raw = unsafe { String::from_utf8_lossy(&INPUT_BUF).to_string() };
+    let (name, member) = match raw.split_once('|') {
+        Some((n, m)) if !m.is_empty() => (n.to_string(), Some(m.to_string())),
+        _ => (raw, None),
+    };
+    let session = unsafe {
+        match SESSION.as_mut() {
+            Some(s) => s,
+            None => {
+                set_result("{\"ok\":false,\"error\":\"no model loaded\"}".into());
+                return 1;
+            }
+        }
+    };
+    let p = if period < 0 { None } else { Some(period as usize) };
+    if let Err(e) = session.patch_input(&name, member.as_deref(), p, value) {
+        set_result(format!("{{\"ok\":false,\"error\":\"{}\"}}", json_escape(&e)));
+        return 1;
+    }
+    match session.recalc() {
+        Ok(stats) => {
+            let stats_json = format!(
+                "\"steps_run\":{},\"steps_total\":{},\"nodes_changed\":{},",
+                stats.steps_run, stats.steps_total, stats.nodes_changed
+            );
+            let json = dump_state(session, &stats_json, true);
+            set_result(json);
+            0
+        }
+        Err(e) => {
+            set_result(format!("{{\"ok\":false,\"error\":\"{}\"}}", json_escape(&e)));
+            1
+        }
+    }
+}
+
+/// Evaluate a scenario (name via the input buffer; "Base" = the model as
+/// written) and return its full state. Base values stay untouched.
+#[no_mangle]
+pub extern "C" fn fml_scenario() -> i32 {
+    let name = unsafe { String::from_utf8_lossy(&INPUT_BUF).to_string() };
+    let session = unsafe {
+        match SESSION.as_mut() {
+            Some(s) => s,
+            None => {
+                set_result("{\"ok\":false,\"error\":\"no model loaded\"}".into());
+                return 1;
+            }
+        }
+    };
+    if name == "Base" {
+        unsafe {
+            ACTIVE_SCENARIO = None;
+        }
+        let json = dump_state(session, "\"steps_run\":0,\"steps_total\":0,\"nodes_changed\":0,", false);
+        set_result(json);
+        return 0;
+    }
+    match session.eval_scenario(&name) {
+        Ok((mut vals, stats)) => {
+            unsafe {
+                ACTIVE_SCENARIO = Some(name);
+            }
+            std::mem::swap(&mut session.values, &mut vals);
+            let stats_json = format!(
+                "\"steps_run\":{},\"steps_total\":{},\"nodes_changed\":{},",
+                stats.steps_run, stats.steps_total, stats.nodes_changed
+            );
+            let json = dump_state(session, &stats_json, false);
+            std::mem::swap(&mut session.values, &mut vals);
+            set_result(json);
+            0
+        }
+        Err(e) => {
+            set_result(format!("{{\"ok\":false,\"error\":\"{}\"}}", json_escape(&e)));
+            1
+        }
+    }
+}
+
+/// Tornado sensitivity for one output cell (name via input buffer, with
+/// optional "|member"); returns ranked {label, down, up} bars.
+#[no_mangle]
+pub extern "C" fn fml_tornado(period: i32, rel: f64) -> i32 {
+    let raw = unsafe { String::from_utf8_lossy(&INPUT_BUF).to_string() };
+    let (name, member) = match raw.split_once('|') {
+        Some((n, m)) if !m.is_empty() => (n.to_string(), Some(m.to_string())),
+        _ => (raw, None),
+    };
+    let session = unsafe {
+        match SESSION.as_mut() {
+            Some(s) => s,
+            None => {
+                set_result("{\"ok\":false,\"error\":\"no model loaded\"}".into());
+                return 1;
+            }
+        }
+    };
+    let p = if period < 0 { None } else { Some(period as usize) };
+    match session.tornado(&name, member.as_deref(), p, rel) {
+        Ok(bars) => {
+            let mut out = String::from("{\"ok\":true,\"bars\":[");
+            for (k, (label, down, up)) in bars.iter().take(12).enumerate() {
+                if k > 0 {
+                    out.push(',');
+                }
+                out.push_str(&format!(
+                    "[\"{}\",{},{}]",
+                    json_escape(label),
+                    json_num(*down),
+                    json_num(*up)
+                ));
+            }
+            out.push_str("]}");
+            set_result(out);
+            0
+        }
+        Err(e) => {
+            set_result(format!("{{\"ok\":false,\"error\":\"{}\"}}", json_escape(&e)));
+            1
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn fml_recalc() -> i32 {
+    let session = unsafe {
+        match SESSION.as_mut() {
+            Some(s) => s,
+            None => {
+                set_result("{\"ok\":false,\"error\":\"no model loaded\"}".into());
+                return 1;
+            }
+        }
+    };
+    match session.recalc() {
+        Ok(stats) => {
+            let stats_json = format!(
+                "\"steps_run\":{},\"steps_total\":{},\"nodes_changed\":{},",
+                stats.steps_run, stats.steps_total, stats.nodes_changed
+            );
+            let json = {
+                let s: &mut Session = session;
+                dump_state(s, &stats_json, false)
+            };
+            set_result(json);
+            0
+        }
+        Err(e) => {
+            set_result(format!("{{\"ok\":false,\"error\":\"{}\"}}", json_escape(&e)));
+            1
+        }
+    }
+}

@@ -1,0 +1,87 @@
+model golden.finplan
+// Warren & Shelton (1971), "A Simultaneous Equation Approach to Financial
+// Planning", Journal of Finance 26(5). W&S equation numbers in comments.
+// Golden values: finmodel-lang-research/08-finplan-golden.md
+
+calendar plan = yearly 2026 .. 2029
+currency USD
+unit share
+
+// ── Exogenous inputs ────────────────────────────────────────────────
+input g           : rate over plan = { 2026: 15%, 2027: 12%, 2028: 10%, 2029: 8% }
+input ebit_margin : rate = 12%
+input rca         : rate = 25%
+input rfa         : rate = 45%
+input rcl         : rate = 12%
+input tax_rate    : rate = 25%
+input retention   : rate = 60%
+input pfd_stock   : USD  = 20_000
+input pfd_div     : USD flow over plan = 1_200
+input lr          : USD flow over plan = 8_000
+input i_new       : rate = 7%
+input u_debt      : rate = 2%
+input u_equity    : rate = 5%
+input k_target    : rate = 45%
+input pe          : ratio = 12
+
+// ── Sales & investment block (recursive, not simultaneous) ──────────
+sales : USD flow over plan init 2025: 500_000
+    = prev(sales) * (1 + g)                       // (1)
+
+ebit   = ebit_margin * sales                      // (2)
+ca     = rca * sales                              // (3)
+fa     = rfa * sales                              // (4)
+assets = ca + fa                                  // (5)
+cl     = rcl * sales                              // (6)
+
+// ── Financing block: simultaneous within each period ────────────────
+solve financing tolerance 0.01 USD max_iterations 200 {
+
+  interest : USD flow over plan                   // (11)-(13) folded
+      = prev(i_eff) * (prev(debt) - lr) + i_new * new_debt
+
+  ebt    = ebit - interest - u_debt * new_debt    // (13)
+  ni     = (1 - tax_rate) * ebt                   // (14)
+  eafcd  = ni - pfd_div                           // (15)
+  cmdiv  = (1 - retention) * eafcd                // (16)
+
+  retained : USD stock over plan init 2025: 60_000        // (10)
+      = prev(retained) + retention * eafcd
+
+  debt : USD stock over plan init 2025: 80_000            // (8)
+      = prev(debt) - lr + new_debt
+
+  common_stock : USD stock over plan init 2025: 120_000   // (9)
+      = prev(common_stock) + new_stock
+
+  // Policy closure: W&S (12), L = K(S+R), rearranged as a definition
+  new_debt : USD flow over plan
+      = k_target * (common_stock + retained) - (prev(debt) - lr)
+
+  // Sources = uses: W&S (6)-(7) replaced by the balance-sheet identity
+  new_stock : USD flow over plan
+      = assets - cl - pfd_stock - debt - retained - prev(common_stock)
+
+  i_eff : rate over plan init 2025: 6%            // (11)
+      = interest / debt
+
+  // Per-share loop: (17)-(20)
+  eps        : USD/share over plan = eafcd / numcs        // (20)
+  price      : USD/share over plan = pe * eps             // (19)
+  new_shares : share flow over plan
+      = new_stock / ((1 - u_equity) * price)              // (18)
+  numcs : share stock over plan init 2025: 10_000         // (17)
+      = prev(numcs) + new_shares
+}
+
+// ── Invariants ──────────────────────────────────────────────────────
+assert balance_ties : assets - cl - pfd_stock - debt - common_stock - retained == 0 USD ± 0.05
+assert leverage_hit : debt / (common_stock + retained) == k_target ± 0.001
+
+// ── Scenarios: named assumption overlays (unweighted, per the literature) ──
+scenario Recession from Base {
+  g = { 2026: 2%, 2027: 0%, 2028: 1%, 2029: 3% }
+}
+scenario Boom from Base {
+  g = { 2026: 22%, 2027: 20%, 2028: 18%, 2029: 15% }
+}

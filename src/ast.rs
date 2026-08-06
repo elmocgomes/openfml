@@ -1,0 +1,358 @@
+//! Abstract syntax for the Phase-1 subset of .fml (extended for golden
+//! model #3: one entity-style dimension, member-dependent `local`
+//! currencies, currency conversion, member/group indexing).
+
+use crate::calendar::PeriodLit;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BinOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Pow,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CmpOp {
+    Eq,
+    Ge,
+    Le,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FirstLast {
+    First,
+    Last,
+}
+
+/// An absolute or t-relative timeline position used by windows and indexing.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Bound {
+    Rel(i32),
+    RangeStart(String, i32),
+    RangeEnd(String, i32),
+}
+
+/// A period-set reference in a `match t` arm: `constr` or `ops \ tenor`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RangeSetRef {
+    pub base: String,
+    pub minus: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Expr {
+    /// Bare numeric literal — unit-polymorphic in additive/init positions.
+    Num(f64),
+    /// Number with an explicit declared unit, e.g. `0.01 USD`.
+    Qty(f64, String),
+    /// Percent literal, stored as its value (`15%` → 0.15), dimensionless.
+    Pct(f64),
+    Ref(String),
+    /// `prev(x)` with optional inline boundary value: `prev(x) init e`.
+    Prev(String, Option<Box<Expr>>),
+    Neg(Box<Expr>),
+    Bin(BinOp, Box<Expr>, Box<Expr>),
+    /// Builtin n-ary calls: `min`, `max`.
+    Call(String, Vec<Expr>),
+    /// `year(t)`.
+    YearT,
+    /// `<value> when first(range)` / `when last(range)`.
+    When {
+        value: Box<Expr>,
+        pos: FirstLast,
+        range: String,
+    },
+    /// `match t { in constr -> e, ... }`
+    MatchT(Vec<(RangeSetRef, Expr)>),
+    /// `match <Dim> { Member -> e, ..., else -> e }`
+    MatchDim {
+        dim: String,
+        arms: Vec<(String, Expr)>,
+        default: Option<Box<Expr>>,
+    },
+    /// `name[Member]`, `name[Group]`, or chained `name[A][EU]` — pin one
+    /// coordinate per member (Group = sum over that dimension's leaves;
+    /// requires a uniform unit).
+    MemberIx {
+        name: String,
+        members: Vec<String>,
+    },
+    /// `expr in <unit> [at <rate>]` — explicit conversion. With a rate,
+    /// the multiply/divide direction follows from the units; without one,
+    /// it is a scale conversion between units of the same dimension
+    /// (kEUR ↔ EUR).
+    Conv {
+        body: Box<Expr>,
+        target: String,
+        rate: Option<Box<Expr>>,
+    },
+    /// `sum(name[<bound> .. <bound>])`.
+    WindowSum {
+        name: String,
+        from: Bound,
+        to: Bound,
+    },
+    /// `sum[range](expr)`.
+    RangeSum {
+        range: String,
+        body: Box<Expr>,
+    },
+    /// `npv(rate, expr over range)`.
+    Npv {
+        rate: Box<Expr>,
+        body: Box<Expr>,
+        range: String,
+    },
+    /// `name[<bound>]` — a series value at an absolute timeline position.
+    At {
+        name: String,
+        bound: Bound,
+    },
+    /// `irr(calendar, measure)`.
+    Irr {
+        calendar: String,
+        name: String,
+    },
+    /// `annualize(x)`.
+    Annualize(Box<Expr>),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Kind {
+    Stock,
+    Flow,
+}
+
+#[derive(Clone, Debug)]
+pub struct UnitAst {
+    /// Unit name, `1`/`rate`/`ratio` (dimensionless), or `local`.
+    pub num: String,
+    pub den: Option<String>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct TypeAnn {
+    pub unit: Option<UnitAst>,
+    pub kind: Option<Kind>,
+}
+
+#[derive(Clone, Debug)]
+pub enum Body {
+    Expr(Expr),
+    /// `{ 2026-01: 1.09, ... }` — inputs only.
+    Map(Vec<(PeriodLit, Expr)>),
+    /// Input-only: `match Dim { Member -> <map or expr> ... [else -> …] }` —
+    /// the budget-template form: each member (cost center, entity…) owns an
+    /// arm, and per-period map arms become grid-editable per member.
+    DimMatch {
+        dim: String,
+        arms: Vec<(String, Body)>,
+        default: Option<Box<Body>>,
+    },
+}
+
+#[derive(Clone, Debug)]
+pub struct MeasureDecl {
+    pub name: String,
+    pub is_input: bool,
+    pub ann: TypeAnn,
+    /// `over` clause: dimension and/or calendar/range names.
+    pub over: Vec<String>,
+    /// `init <period>: <expr>` or `init: <expr>`.
+    pub init: Option<(Option<PeriodLit>, Expr)>,
+    pub body: Body,
+    pub line: usize,
+}
+
+#[derive(Clone, Debug)]
+pub struct RelaxDecl {
+    pub name: String,
+    pub init: Expr,
+}
+
+#[derive(Clone, Debug)]
+pub enum SolveForm {
+    Block(Vec<MeasureDecl>),
+    Tearing(Vec<RelaxDecl>),
+}
+
+#[derive(Clone, Debug)]
+pub struct SolveDecl {
+    pub name: String,
+    pub tolerance: Option<Expr>,
+    pub max_iterations: u32,
+    pub form: SolveForm,
+    pub line: usize,
+}
+
+#[derive(Clone, Debug)]
+pub struct AssertDecl {
+    pub name: String,
+    pub over: Option<String>,
+    pub lhs: Expr,
+    pub op: CmpOp,
+    pub rhs: Expr,
+    pub tol: Option<Expr>,
+    pub line: usize,
+}
+
+#[derive(Clone, Debug)]
+pub enum Item {
+    Measure(MeasureDecl),
+    Solve(SolveDecl),
+    Assert(AssertDecl),
+}
+
+#[derive(Clone, Debug)]
+pub struct CalendarDecl {
+    pub name: String,
+    pub grain: String,
+    pub start: PeriodLit,
+    pub end: PeriodLit,
+}
+
+#[derive(Clone, Debug)]
+pub struct PeriodDecl {
+    pub name: String,
+    pub start: PeriodLit,
+    pub end: PeriodLit,
+}
+
+/// `dimension Entity = tree { Group -> { PT_Co, US_Co } }` or
+/// `dimension Product = list { A, B }` (no group/rollup member).
+#[derive(Clone, Debug)]
+pub struct DimensionDecl {
+    pub name: String,
+    pub group: Option<String>,
+    pub members: Vec<String>,
+}
+
+/// `functional Entity = { PT_Co: EUR, US_Co: USD }`
+#[derive(Clone, Debug)]
+pub struct FunctionalDecl {
+    pub dim: String,
+    pub map: Vec<(String, String)>,
+}
+
+/// What kind of literal an editable input site holds — drives how a new
+/// value is rendered back into the source text.
+#[derive(Clone, Debug, PartialEq)]
+pub enum LitKind {
+    Num,
+    Pct,
+    Qty(String),
+}
+
+/// A literal input value with its byte span in the source — the write-back
+/// target for grid edits (lossless span patching).
+#[derive(Clone, Debug)]
+pub struct EditSite {
+    pub measure: String,
+    /// Dimension member owning the literal (input `match Dim` arms).
+    pub member: Option<String>,
+    /// Map-entry period, or None for a broadcast/scalar literal.
+    pub period: Option<PeriodLit>,
+    pub span: (usize, usize),
+    pub kind: LitKind,
+}
+
+/// `scenario Downside from Base { g = { 2026: 2% }  churn = 3.5% }` —
+/// a named overlay of input overrides. Deliberately unweighted (the
+/// scenario-planning literature's stance); `from` chains overlays.
+#[derive(Clone, Debug)]
+pub struct ScenarioDecl {
+    pub name: String,
+    pub from: Option<String>,
+    /// (input name, override body, line)
+    pub overrides: Vec<(String, Body, usize)>,
+    pub line: usize,
+}
+
+/// `unit MWh` or `unit kEUR = 1000 EUR`.
+#[derive(Clone, Debug)]
+pub struct UnitDecl {
+    pub name: String,
+    pub scaled: Option<(f64, String)>,
+}
+
+#[derive(Clone, Debug)]
+pub struct Model {
+    pub name: String,
+    pub calendar: Option<CalendarDecl>,
+    pub period_ranges: Vec<PeriodDecl>,
+    pub dimensions: Vec<DimensionDecl>,
+    pub functional: Option<FunctionalDecl>,
+    pub currency: Option<String>,
+    pub units: Vec<UnitDecl>,
+    pub items: Vec<Item>,
+    pub scenarios: Vec<ScenarioDecl>,
+    pub edit_sites: Vec<EditSite>,
+}
+
+impl Model {
+    pub fn asserts(&self) -> Vec<&AssertDecl> {
+        self.items
+            .iter()
+            .filter_map(|i| match i {
+                Item::Assert(a) => Some(a),
+                _ => None,
+            })
+            .collect()
+    }
+}
+
+/// Every measure name mentioned anywhere in an expression.
+pub fn all_names(e: &Expr, out: &mut Vec<String>) {
+    match e {
+        Expr::Ref(n)
+        | Expr::At { name: n, .. }
+        | Expr::WindowSum { name: n, .. }
+        | Expr::Irr { name: n, .. }
+        | Expr::MemberIx { name: n, .. } => out.push(n.clone()),
+
+        Expr::Prev(n, init) => {
+            out.push(n.clone());
+            if let Some(i) = init {
+                all_names(i, out);
+            }
+        }
+        Expr::Neg(x) | Expr::Annualize(x) => all_names(x, out),
+        Expr::Conv { body, rate, .. } => {
+            all_names(body, out);
+            if let Some(r) = rate {
+                all_names(r, out);
+            }
+        }
+        Expr::Bin(_, a, b) => {
+            all_names(a, out);
+            all_names(b, out);
+        }
+        Expr::Call(_, args) => {
+            for a in args {
+                all_names(a, out);
+            }
+        }
+        Expr::When { value, .. } => all_names(value, out),
+        Expr::MatchT(arms) => {
+            for (_, a) in arms {
+                all_names(a, out);
+            }
+        }
+        Expr::MatchDim { arms, default, .. } => {
+            for (_, a) in arms {
+                all_names(a, out);
+            }
+            if let Some(d) = default {
+                all_names(d, out);
+            }
+        }
+        Expr::RangeSum { body, .. } => all_names(body, out),
+        Expr::Npv { rate, body, .. } => {
+            all_names(rate, out);
+            all_names(body, out);
+        }
+        Expr::Num(_) | Expr::Qty(_, _) | Expr::Pct(_) | Expr::YearT => {}
+    }
+}

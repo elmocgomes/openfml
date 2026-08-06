@@ -1,0 +1,18 @@
+[package]
+name = "fml"
+version = "0.1.0"
+edition = "2021"
+description = "A corporate finance modelling language — Phase 1: parser, unit/type checker, reference evaluator"
+
+[lib]
+name = "fml"
+path = "src/lib.rs"
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "fml"
+path = "src/main.rs"
+
+[[bin]]
+name = "fml-server"
+path = "src/bin/fml_server.rs"

@@ -1,0 +1,396 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>fml workbench</title>
+<style>
+  :root { color-scheme: light dark;
+          --edge: rgba(128,128,128,.25); --dim: rgba(128,128,128,.12);
+          --accent: #2a7dd1; --ok: #2a9d3a; --bad: #d33; }
+  * { box-sizing: border-box; }
+  body { font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+         margin: 0; height: 100vh; display: flex; flex-direction: column; }
+  header { display:flex; align-items:center; gap:1rem; padding:.5rem 1rem;
+           border-bottom:1px solid var(--edge); }
+  header h1 { font-size:1rem; margin:0; } header h1 span { opacity:.5; font-weight:400; }
+  header .models button { font:inherit; padding:.2rem .6rem; margin-left:.35rem;
+    border:1px solid var(--edge); background:transparent; border-radius:5px; cursor:pointer; }
+  header .models button.on { border-color: var(--accent); color: var(--accent); }
+  #scen { margin-left:.5rem; }
+  #scen button { font:inherit; padding:.15rem .55rem; margin-left:.3rem; border:1px solid var(--edge);
+    background:transparent; border-radius:10px; cursor:pointer; opacity:.85; }
+  #scen button.on { border-color:#b8860b; color:#b8860b; font-weight:600; }
+  #file button { font:inherit; padding:.15rem .55rem; border:1px solid var(--edge);
+    background:transparent; border-radius:5px; cursor:pointer; }
+  #draftState { font-size:.85em; opacity:.7; margin-left:.4rem; }
+  #draftState button { border:none; text-decoration:underline; padding:0; margin-left:.3rem; }
+  td.dup { background: rgba(42,157,58,.18); } td.ddown { background: rgba(221,51,51,.14); }
+  #stats { margin-left:auto; opacity:.85; } #stats b { color: var(--ok); }
+  main { flex:1; display:grid; grid-template-columns: minmax(320px, 34%) 1fr; min-height:0; }
+  #left { display:flex; flex-direction:column; border-right:1px solid var(--edge); min-height:0; }
+  #src { flex:1; width:100%; border:0; resize:none; padding: .75rem 1rem;
+         font:inherit; background:transparent; outline:none; }
+  #err { color: var(--bad); white-space: pre-wrap; padding:.4rem 1rem;
+         border-top:1px solid var(--edge); min-height:1.5rem; }
+  #err.on { background: rgba(221,51,51,.12); font-weight:600; }
+  #right.stale { opacity:.45; filter: grayscale(.6); transition: opacity .2s; }
+  #foot .lbl { opacity:.5; margin-right:.5rem; }
+  #right { overflow:auto; min-height:0; }
+  table { border-collapse: collapse; width: max-content; min-width:100%; }
+  th, td { text-align: right; padding:.22rem .55rem; border-bottom:1px solid var(--edge);
+           white-space:nowrap; }
+  thead th { position: sticky; top: 0; background: Canvas; z-index: 2; }
+  th:first-child, td:first-child { text-align:left; position:sticky; left:0;
+    background: Canvas; z-index:1; max-width: 220px; overflow:hidden; text-overflow:ellipsis; }
+  td.chg { background: rgba(255,200,0,.3); }
+  td.out { opacity:.35; }
+  td input { font:inherit; width: 7.5em; text-align:right; border:0; border-bottom:1px dashed var(--accent);
+             background: rgba(42,125,209,.07); color:inherit; outline:none; padding:0; }
+  tr.inp td:first-child { color: var(--accent); }
+  .unit { opacity:.5; font-size:.85em; margin-left:.4em; }
+  #foot { display:flex; gap:1.5rem; padding:.45rem 1rem; border-top:1px solid var(--edge);
+          flex-wrap:wrap; align-items:baseline; }
+  .pass::before { content:"✓ "; color:var(--ok); } .fail::before { content:"✗ "; color:var(--bad); }
+  #scalars span { margin-right:1.2rem; opacity:.9; }
+  #tornado { position:fixed; right:1rem; bottom:3rem; background:Canvas; border:1px solid var(--edge);
+    border-radius:8px; padding:.6rem .9rem; box-shadow:0 4px 18px rgba(0,0,0,.25); max-width:420px; z-index:5; }
+  #tornado h3 { margin:.1rem 0 .5rem; font-size:.9rem; }
+  #tornado .bar { display:grid; grid-template-columns: 150px 1fr; gap:.5rem; align-items:center;
+    font-size:.8rem; margin:.15rem 0; }
+  #tornado .track { position:relative; height:10px; background:var(--dim); border-radius:5px; }
+  #tornado .dn, #tornado .up { position:absolute; top:0; height:100%; }
+  #tornado .dn { background:#d33; right:50%; border-radius:5px 0 0 5px; }
+  #tornado .up { background:var(--ok); left:50%; border-radius:0 5px 5px 0; }
+  #tornado .close { float:right; cursor:pointer; opacity:.6; }
+  td.torn { cursor: crosshair; }
+</style>
+</head>
+<body>
+<header>
+  <h1>fml <span>workbench — text ⇄ grid, one live model</span></h1>
+  <span class="models" id="models"></span>
+  <span id="scen"></span>
+  <span id="file">
+    <button id="saveBtn" title="Save .fml to disk (Ctrl/Cmd+S)">save</button>
+    <span id="draftState"></span>
+  </span>
+  <span id="stats">loading…</span>
+</header>
+<main>
+  <div id="left">
+    <textarea id="src" spellcheck="false"></textarea>
+    <div id="err"></div>
+  </div>
+  <div id="right"><table id="tbl"></table></div>
+</main>
+<div id="foot"><span id="asserts"></span><span><span class="lbl">scalars:</span><span id="scalars"></span></span></div>
+<script type="module">
+const MODELS = ["rolling", "budget", "finplan", "solar_pf", "fx_consol"];
+const enc = new TextEncoder(), dec = new TextDecoder();
+let exports, prev = {}, current = "finplan", loadedOk = false;
+let baseVals = {}, activeScen = "Base";
+// ---- client mode: ?server=http://localhost:5199&user=alice ----
+const PARAMS = new URLSearchParams(location.search);
+const SERVER = PARAMS.get("server");
+const USER = PARAMS.get("user") || "anon";
+let myGrants = [];
+function authorized(measure, member) {
+  return myGrants.some(g =>
+    g.measure === "*" ||
+    (g.measure === measure && (g.member === null || g.member === member)));
+}
+let diskText = "";
+const draftKey = () => "fml:draft:" + current;
+function saveDraft() {
+  const v = document.getElementById("src").value;
+  if (v === diskText) {
+    localStorage.removeItem(draftKey());
+  } else {
+    localStorage.setItem(draftKey(), v);
+  }
+  updateDraftState();
+}
+function updateDraftState() {
+  const el = document.getElementById("draftState");
+  const has = localStorage.getItem(draftKey()) !== null;
+  el.innerHTML = has
+    ? 'draft <button id="revertBtn" title="Discard the draft and reload the file">revert</button>'
+    : "";
+  const rb = document.getElementById("revertBtn");
+  if (rb) rb.addEventListener("click", () => {
+    localStorage.removeItem(draftKey());
+    document.getElementById("src").value = diskText;
+    updateDraftState();
+    load(diskText, "revert");
+  });
+}
+async function saveToDisk() {
+  const text = document.getElementById("src").value;
+  const name = current + ".fml";
+  if (window.showSaveFilePicker) {
+    try {
+      const h = await showSaveFilePicker({
+        suggestedName: name,
+        types: [{ description: "fml model", accept: { "text/plain": [".fml"] } }],
+      });
+      const w = await h.createWritable();
+      await w.write(text);
+      await w.close();
+      return;
+    } catch (e) {
+      if (e.name === "AbortError") return; // user cancelled
+    }
+  }
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
+  a.download = name;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+function writeInput(str) {
+  const bytes = enc.encode(str);
+  const ptr = exports.fml_input_ptr(bytes.length);
+  new Uint8Array(exports.memory.buffer, ptr, bytes.length).set(bytes);
+}
+function readResult() {
+  const p = exports.fml_result_ptr(), l = exports.fml_result_len();
+  return JSON.parse(dec.decode(new Uint8Array(exports.memory.buffer, p, l)));
+}
+function fmt(v) {
+  if (v === null) return "·";
+  const a = Math.abs(v);
+  if (a >= 1000) return v.toLocaleString("en-US", {maximumFractionDigits: 0});
+  if (a < 10 && a !== 0) return v.toLocaleString("en-US", {maximumFractionDigits: 4});
+  return v.toLocaleString("en-US", {maximumFractionDigits: 2});
+}
+function stats(r, us, what) {
+  document.getElementById("stats").innerHTML =
+    `${what}: <b>${r.steps_run}/${r.steps_total}</b> steps · ${r.nodes_changed} cells · <b>${us.toFixed(0)} µs</b>`;
+}
+function renderScenChips(r) {
+  const box = document.getElementById("scen");
+  const names = ["Base", ...(r.scenarios || [])];
+  activeScen = r.active || "Base";
+  box.innerHTML = "";
+  if (names.length === 1) return;
+  for (const n of names) {
+    const b = document.createElement("button");
+    b.textContent = n;
+    b.classList.toggle("on", n === activeScen);
+    b.addEventListener("click", () => {
+      writeInput(n);
+      const t0 = performance.now();
+      if (exports.fml_scenario() === 0) {
+        const r2 = readResult();
+        stats(r2, (performance.now() - t0) * 1000, n === "Base" ? "Base" : `scenario ${n}`);
+        render(r2);
+      } else {
+        setErr(readResult().error);
+      }
+    });
+    box.appendChild(b);
+  }
+}
+function render(r) {
+  renderScenChips(r);
+  const inScen = (r.active || "Base") !== "Base";
+  let html = "<thead><tr><th>measure</th>" +
+    r.periods.map(p => `<th>${p}</th>`).join("") + "</tr></thead><tbody>";
+  for (const s of r.series) {
+    const cls = s.input ? "inp" : "";
+    html += `<tr class="${cls}"><td title="${s.name}">${s.name}<span class="unit">${s.unit}</span></td>`;
+    s.vals.forEach((v, t) => {
+      const inRange = t >= s.range[0] && t <= s.range[1];
+      let editable = !inScen && (s.edit === "all" ? inRange : Array.isArray(s.edit) && s.edit.includes(t));
+      if (SERVER) editable = editable && authorized(s.key, s.member || null);
+      if (editable) {
+        html += `<td><input data-key="${s.key}" data-member="${s.member || ""}" data-t="${t}" value="${v === null ? "" : v}"></td>`;
+      } else if (inScen) {
+        // diff-vs-Base coloring with the Base value as tooltip
+        const b = baseVals[s.name] ? baseVals[s.name][t] : null;
+        const differs = b !== null && v !== null && Math.abs(v - b) > 1e-9;
+        const dir = differs ? (v > b ? "dup" : "ddown") : "";
+        const tip = differs ? ` title="Base: ${fmt(b)}"` : "";
+        html += `<td class="${dir}${inRange ? "" : " out"}"${tip}>${fmt(v)}</td>`;
+      } else {
+        const changed = prev[s.name] && prev[s.name][t] !== v;
+        const torn = !SERVER && !inScen && inRange && !s.input ? " torn" : "";
+        const tdata = torn ? ` data-tkey="${s.key}" data-tmember="${s.member || ""}" data-tt="${t}" title="click: tornado sensitivity ±10%"` : "";
+        html += `<td class="${changed ? "chg" : ""}${inRange ? "" : " out"}${torn}"${tdata}>${fmt(v)}</td>`;
+      }
+    });
+    prev[s.name] = s.vals;
+    if (!inScen) baseVals[s.name] = s.vals;
+    html += "</tr>";
+  }
+  html += "</tbody>";
+  document.getElementById("tbl").innerHTML = html;
+  document.getElementById("asserts").innerHTML = r.asserts.map(([n, ok, dev]) =>
+    `<span class="${ok ? "pass" : "fail"}">${n}</span>`).join(" ");
+  document.getElementById("scalars").innerHTML = r.scalars.map(s =>
+    `<span>${s.name} = <b>${fmt(s.val)}</b><span class="unit">${s.unit}</span></span>`).join("");
+  document.querySelectorAll("td.torn").forEach(td => {
+    td.addEventListener("click", () => {
+      writeInput(td.dataset.tmember ? td.dataset.tkey + "|" + td.dataset.tmember : td.dataset.tkey);
+      const t0 = performance.now();
+      if (exports.fml_tornado(Number(td.dataset.tt), 0.10) !== 0) { setErr(readResult().error); return; }
+      const r2 = readResult();
+      const us = (performance.now() - t0) * 1000;
+      const cellName = td.dataset.tmember ? `${td.dataset.tkey}[${td.dataset.tmember}]` : td.dataset.tkey;
+      showTornado(cellName + " @ " + document.querySelectorAll("#tbl thead th")[Number(td.dataset.tt) + 1].textContent, r2.bars, us);
+    });
+  });
+  document.querySelectorAll("td input").forEach(inp => {
+    inp.addEventListener("change", () => {
+      const v = Number(inp.value);
+      if (!Number.isFinite(v)) return;
+      if (SERVER) {
+        const t0 = performance.now();
+        fetch(SERVER + "/patch", { method: "POST", body: JSON.stringify({
+          user: USER, name: inp.dataset.key, member: inp.dataset.member || "",
+          period: inp.dataset.t, value: String(v) }) })
+          .then(r => r.json())
+          .then(async r => {
+            if (!r.ok) { setErr(r.error); return; }
+            await refreshFromServer((performance.now() - t0) * 1000, "commit #" + r.seq);
+          })
+          .catch(e => setErr(String(e)));
+        return;
+      }
+      writeInput(inp.dataset.member ? inp.dataset.key + "|" + inp.dataset.member : inp.dataset.key);
+      const t0 = performance.now();
+      if (exports.fml_patch(Number(inp.dataset.t), v) === 0) {
+        const r2 = readResult();
+        stats(r2, (performance.now() - t0) * 1000, "grid→text patch + recalc");
+        if (r2.src !== undefined && r2.src !== srcBox.value) {
+          const top = srcBox.scrollTop;
+          srcBox.value = r2.src;       // the grid edit rewrote the source
+          srcBox.scrollTop = top;
+          saveDraft();
+        }
+        render(r2);
+      } else {
+        setErr(readResult().error);
+      }
+    });
+  });
+}
+function setErr(msg) {
+  const e = document.getElementById("err");
+  e.textContent = msg;
+  e.classList.toggle("on", !!msg);
+  // A failed compile means the grid shows the LAST GOOD model — dim it.
+  document.getElementById("right").classList.toggle("stale", !!msg);
+}
+function load(srcText, what) {
+  writeInput(srcText);
+  const t0 = performance.now();
+  const rc = exports.fml_load();
+  const r = readResult();
+  if (rc !== 0) {
+    setErr(r.error + "   (grid shows the last valid model)");
+    loadedOk = false;
+    return;
+  }
+  loadedOk = true;
+  setErr("");
+  prev = {};
+  baseVals = {};
+  activeScen = "Base";
+  stats(r, (performance.now() - t0) * 1000, what);
+  render(r);
+}
+
+let lastSeq = -1;
+async function refreshFromServer(us, what) {
+  const r = await (await fetch(SERVER + "/state")).json();
+  lastSeq = r.seq;
+  stats(r, us || 0, what || "server state");
+  render(r);
+  const m = await (await fetch(SERVER + "/model")).json();
+  const box = document.getElementById("src");
+  if (m.src !== box.value) { const top = box.scrollTop; box.value = m.src; box.scrollTop = top; }
+}
+if (SERVER) {
+  // ---- connected client: server evaluates, we project ----
+  document.querySelector("header h1 span").textContent =
+    `— connected to ${SERVER} as ${USER}`;
+  document.getElementById("models").style.display = "none";
+  document.getElementById("file").style.display = "none";
+  const box = document.getElementById("src");
+  box.readOnly = true;
+  const g = await (await fetch(SERVER + "/grants")).json();
+  myGrants = (g.users.find(u => u.user === USER) || { grants: [] }).grants;
+  await refreshFromServer(0, "connected");
+  setInterval(async () => {
+    try {
+      const s = await (await fetch(SERVER + "/seq")).json();
+      if (s.seq !== lastSeq) await refreshFromServer(0, "peer commit #" + s.seq);
+    } catch (e) { /* server away; keep last state */ }
+  }, 1500);
+  throw new Error("client-mode boot complete"); // skip local-wasm init below
+}
+function showTornado(title, bars, us) {
+  document.getElementById("tornado")?.remove();
+  const div = document.createElement("div");
+  div.id = "tornado";
+  const maxAbs = Math.max(...bars.map(b => Math.max(Math.abs(b[1]), Math.abs(b[2]))), 1e-12);
+  div.innerHTML = `<span class="close" onclick="this.parentNode.remove()">✕</span>
+    <h3>tornado: ${title} <small style="opacity:.5">(inputs ±10%, ${us.toFixed(0)} µs)</small></h3>` +
+    bars.map(([label, dn, up]) => {
+      const w = v => (Math.abs(v) / maxAbs * 50).toFixed(1);
+      return `<div class="bar"><span title="${label}">${label}</span>
+        <span class="track">
+          <span class="dn" style="width:${w(dn)}%"></span>
+          <span class="up" style="width:${w(up)}%"></span>
+        </span></div>`;
+    }).join("");
+  document.body.appendChild(div);
+}
+
+const { instance } = await WebAssembly.instantiate(
+  await (await fetch("fml.wasm?v=" + Date.now())).arrayBuffer(), {});
+exports = instance.exports;
+
+const srcBox = document.getElementById("src");
+async function switchModel(name) {
+  current = name;
+  document.querySelectorAll("#models button").forEach(b =>
+    b.classList.toggle("on", b.textContent === name));
+  diskText = await (await fetch(name + ".fml?v=" + Date.now())).text();
+  const draft = localStorage.getItem(draftKey());
+  const text = draft !== null ? draft : diskText;
+  srcBox.value = text;
+  updateDraftState();
+  load(text, draft !== null ? "draft restored" : "compile+run");
+}
+const mbox = document.getElementById("models");
+for (const m of MODELS) {
+  const b = document.createElement("button");
+  b.textContent = m;
+  b.addEventListener("click", () => switchModel(m));
+  mbox.appendChild(b);
+}
+
+// live text editing: debounced full recompile
+let timer = null;
+srcBox.addEventListener("input", () => {
+  clearTimeout(timer);
+  timer = setTimeout(() => {
+    saveDraft();
+    load(srcBox.value, "recompile");
+  }, 350);
+});
+document.getElementById("saveBtn").addEventListener("click", saveToDisk);
+window.addEventListener("keydown", e => {
+  if ((e.metaKey || e.ctrlKey) && e.key === "s") {
+    e.preventDefault();
+    saveToDisk();
+  }
+});
+
+await switchModel("finplan");
+</script>
+</body>
+</html>

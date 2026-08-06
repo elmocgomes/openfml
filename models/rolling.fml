@@ -1,0 +1,19 @@
+model demo.rolling
+// The actuals switchover: a rolling forecast in one line. Advance `closed`
+// each month as actuals land — everything downstream re-blends.
+
+calendar m = monthly 2026-01 .. 2026-12
+period closed = 2026-01 .. 2026-06            // months with booked actuals
+currency kEUR
+
+input growth : rate = 3%
+input sales_act : kEUR flow over closed
+    = { 2026-01: 100, 2026-02: 104, 2026-03: 101, 2026-04: 108,
+        2026-05: 112, 2026-06: 118 }
+
+sales : kEUR flow over m init 2025-12: 96
+    = actuals sales_act until closed else prev(sales) * (1 + growth)
+
+input margin : rate = 22%
+profit : kEUR flow over m = sales * margin
+fy_profit : kEUR = sum[m](profit)
