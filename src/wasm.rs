@@ -470,6 +470,48 @@ pub extern "C" fn fml_tornado(period: i32, rel: f64) -> i32 {
     }
 }
 
+/// Goal-seek: find the input value that makes an output hit a target.
+/// Input buffer: "in_name|in_member|out_name|out_member" (members may be
+/// empty); periods -1 = broadcast/scalar. Runtime-only — the caller
+/// commits the solution via fml_patch if wanted.
+#[no_mangle]
+pub extern "C" fn fml_goalseek(in_period: i32, out_period: i32, target: f64) -> i32 {
+    let raw = unsafe { String::from_utf8_lossy(&INPUT_BUF).to_string() };
+    let parts: Vec<&str> = raw.split('|').collect();
+    if parts.len() != 4 {
+        set_result("{\"ok\":false,\"error\":\"fml_goalseek expects in|inMember|out|outMember\"}".into());
+        return 1;
+    }
+    let opt = |s: &str| if s.is_empty() { None } else { Some(s.to_string()) };
+    let (iname, imem, oname, omem) = (parts[0].to_string(), opt(parts[1]), parts[2].to_string(), opt(parts[3]));
+    let session = unsafe {
+        match SESSION.as_mut() {
+            Some(s) => s,
+            None => {
+                set_result("{\"ok\":false,\"error\":\"no model loaded\"}".into());
+                return 1;
+            }
+        }
+    };
+    let ip = if in_period < 0 { None } else { Some(in_period as usize) };
+    let op = if out_period < 0 { None } else { Some(out_period as usize) };
+    match session.goal_seek(&iname, imem.as_deref(), ip, &oname, omem.as_deref(), op, target) {
+        Ok(r) => {
+            set_result(format!(
+                "{{\"ok\":true,\"value\":{},\"achieved\":{},\"iterations\":{}}}",
+                json_num(r.value),
+                json_num(r.achieved),
+                r.iterations
+            ));
+            0
+        }
+        Err(e) => {
+            set_result(format!("{{\"ok\":false,\"error\":\"{}\"}}", json_escape(&e)));
+            1
+        }
+    }
+}
+
 /// "Explain this number" for one cell (input buffer: "name|member";
 /// period -1 = scalar): definition site routed to the owning file, the
 /// match/actuals arm that fired, and direct dependency cells with values.

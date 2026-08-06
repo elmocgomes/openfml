@@ -248,9 +248,25 @@ The scheduler generalizes to the (measure × member × period) micro-graph.
   definition link jumps the source pane to the owning file and selects
   the defining line, and the tornado runs from a button inside the panel
   (`tests/explain.rs`).
+- **Goal-seek** (`Session::goal_seek`, `fml_goalseek`) — the IFPS
+  classic: which input value makes an output hit a target? Safeguarded
+  secant iteration over runtime values (clamped steps so it survives
+  passing through solve fixpoints), fully restored afterwards —
+  committing the answer is a separate, explicit act. Linear goals land
+  exactly in ~3 evaluations; the nonlinear compounding-growth goal and a
+  goal *through the FINPLAN financing fixpoint* (share price via EBIT
+  margin, re-solving Gauss–Seidel every evaluation) both converge;
+  unresponsive levers are rejected with a clear error
+  (`tests/goalseek.rs`). In the workbench the inspector grew a **goal
+  seek…** form: pick a target and a lever (any literal-editable cell, or
+  a scalar input), solve, then **apply** — routed through the grid→text
+  write-back into the owning file, or falling back to a runtime-only set
+  for distribution inputs. Footer scalars are now clickable, so
+  "fy_profit = 350?" is: click, type 350, pick growth, solve (7 evals,
+  ~600 µs), apply.
 - Still ahead: full lossless CST, salsa memoization, LSP, exact decimals,
-  read-side information-flow control, real authentication, goal-seek,
-  allocate primitive, quantified provenance shares (semiring weights).
+  read-side information-flow control, real authentication, allocate
+  primitive, quantified provenance shares (semiring weights).
 
 ## Layout
 

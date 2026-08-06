@@ -113,7 +113,7 @@
 <script type="module">
 const MODELS = ["rolling", "budget", "team_budget", "finplan", "solar_pf", "fx_consol"];
 const enc = new TextEncoder(), dec = new TextDecoder();
-let exports, prev = {}, current = "finplan", loadedOk = false;
+let exports, prev = {}, current = "finplan", loadedOk = false, lastState = null;
 let baseVals = {}, activeScen = "Base";
 let simBands = null;   // name -> bands (per-slot [p10,p50,p90]) when sim mode on
 // ---- client mode: ?server=http://localhost:5199&user=alice ----
@@ -245,7 +245,26 @@ function renderScenChips(r) {
     box.appendChild(b);
   }
 }
+// Apply a successful fml_patch result: sync per-file sources + rerender.
+function syncPatchResult(r2, us, what) {
+  stats(r2, us, what);
+  (r2.files || []).forEach((f, i) => {
+    const key = i === 0 ? mainFile() : f.name;
+    if (fileTexts[key] !== f.src) {
+      fileTexts[key] = f.src;
+      saveDraftFor(key);
+      if (key === activeFile) {
+        const top = srcBox.scrollTop;
+        srcBox.value = f.src;
+        srcBox.scrollTop = top;
+      }
+    }
+  });
+  renderTabs();
+  render(r2);
+}
 function render(r) {
+  lastState = r;
   renderScenChips(r);
   const inScen = (r.active || "Base") !== "Base";
   let html = "<thead><tr><th>measure</th>" +
@@ -287,7 +306,9 @@ function render(r) {
   document.getElementById("asserts").innerHTML = r.asserts.map(([n, ok, dev]) =>
     `<span class="${ok ? "pass" : "fail"}">${n}</span>`).join(" ");
   document.getElementById("scalars").innerHTML = r.scalars.map(s =>
-    `<span>${s.name} = <b>${fmt(s.val)}</b><span class="unit">${s.unit}</span></span>`).join("");
+    `<span${SERVER ? "" : ` class="scx" data-s="${s.name}" title="click: explain this number" style="cursor:pointer"`}>${s.name} = <b>${fmt(s.val)}</b><span class="unit">${s.unit}</span></span>`).join("");
+  document.querySelectorAll("#scalars .scx").forEach(sp =>
+    sp.addEventListener("click", () => inspect(sp.dataset.s, "", null, false)));
   document.querySelectorAll("td.torn").forEach(td => {
     td.addEventListener("click", () => {
       inspect(td.dataset.tkey, td.dataset.tmember || "", Number(td.dataset.tt), false);
@@ -313,23 +334,7 @@ function render(r) {
       writeInput(inp.dataset.member ? inp.dataset.key + "|" + inp.dataset.member : inp.dataset.key);
       const t0 = performance.now();
       if (exports.fml_patch(Number(inp.dataset.t), v) === 0) {
-        const r2 = readResult();
-        stats(r2, (performance.now() - t0) * 1000, "grid→text patch + recalc");
-        // The grid edit rewrote exactly one file — sync it (files[0] = main).
-        (r2.files || []).forEach((f, i) => {
-          const key = i === 0 ? mainFile() : f.name;
-          if (fileTexts[key] !== f.src) {
-            fileTexts[key] = f.src;
-            saveDraftFor(key);
-            if (key === activeFile) {
-              const top = srcBox.scrollTop;
-              srcBox.value = f.src;
-              srcBox.scrollTop = top;
-            }
-          }
-        });
-        renderTabs();
-        render(r2);
+        syncPatchResult(readResult(), (performance.now() - t0) * 1000, "grid→text patch + recalc");
       } else {
         setErr(readResult().error);
       }
@@ -431,6 +436,25 @@ function highlightDeps(deps) {
     if (td) td.classList.add("hl");
   }
 }
+// Adjustable levers for goal-seek: every literal-editable input cell,
+// plus scalar inputs (distribution inputs fall back to runtime-only apply).
+function leverOptions() {
+  const opts = [];
+  for (const s of (lastState?.series || [])) {
+    if (!s.input) continue;
+    if (s.edit === "all") {
+      opts.push({ key: s.key, member: s.member || "", t: -1, label: cellDisplay(s.key, s.member) + " (all periods)" });
+    } else if (Array.isArray(s.edit)) {
+      for (const t of s.edit) {
+        opts.push({ key: s.key, member: s.member || "", t, label: cellDisplay(s.key, s.member) + " @ " + lastState.periods[t] });
+      }
+    }
+  }
+  for (const sc of (lastState?.scalars || [])) {
+    if (sc.input) opts.push({ key: sc.name, member: "", t: -1, label: sc.name });
+  }
+  return opts;
+}
 function gotoDef(file, line) {
   const key = file === "main" || file === "model" ? mainFile() : file;
   if (fileTexts[key] !== undefined && key !== activeFile) {
@@ -478,7 +502,8 @@ function renderInspect() {
     <div class="meta">defined in <a href="#" id="goDef">${ex.file === "main" || ex.file === "model" ? mainFile() : ex.file}:${ex.line}</a>${ex.arm ? " · " + ex.arm : ""}</div>
     ${ex.note ? `<div class="meta">${ex.note}</div>` : ""}
     ${depRows}
-    ${!ex.input && ex.period !== null ? '<button id="tornBtn">tornado ±10%</button>' : ""}`;
+    ${!ex.input && ex.period !== null ? '<button id="tornBtn">tornado ±10%</button> ' : ""}${!ex.input ? '<button id="gsBtn">goal seek…</button>' : ""}
+    <div id="gsForm"></div>`;
   document.body.appendChild(div);
   div.querySelector(".close").addEventListener("click", () => {
     div.remove();
@@ -499,6 +524,50 @@ function renderInspect() {
   div.querySelector("#goDef").addEventListener("click", e => {
     e.preventDefault();
     gotoDef(ex.file, ex.line);
+  });
+  const gs = div.querySelector("#gsBtn");
+  if (gs) gs.addEventListener("click", () => {
+    const opts = leverOptions();
+    if (!opts.length) { setErr("no adjustable inputs to seek with"); return; }
+    const form = div.querySelector("#gsForm");
+    form.innerHTML = `<div class="meta" style="margin-top:.4rem">target
+      <input id="gsTarget" style="width:6em;font:inherit"> via
+      <select id="gsLever" style="font:inherit">${opts.map((o, i) => `<option value="${i}">${o.label}</option>`).join("")}</select>
+      <button id="gsGo">solve</button></div><div id="gsOut" class="meta"></div>`;
+    form.querySelector("#gsTarget").focus();
+    form.querySelector("#gsGo").addEventListener("click", () => {
+      const target = Number(form.querySelector("#gsTarget").value);
+      if (!Number.isFinite(target)) return;
+      const o = opts[Number(form.querySelector("#gsLever").value)];
+      writeInput(`${o.key}|${o.member}|${ex.name}|${ex.member || ""}`);
+      const t0 = performance.now();
+      const rc = exports.fml_goalseek(o.t, ex.period === null ? -1 : ex.period, target);
+      const r = readResult();
+      const out = form.querySelector("#gsOut");
+      if (rc !== 0) { out.textContent = r.error; return; }
+      out.innerHTML = `${o.label} = <b>${fmt(r.value)}</b> → ${cellDisplay(ex.name, ex.member)} = ${fmt(r.achieved)}
+        <small style="opacity:.6">(${r.iterations} evals, ${((performance.now() - t0) * 1000).toFixed(0)} µs)</small>
+        <button id="gsApply">apply</button>`;
+      out.querySelector("#gsApply").addEventListener("click", () => {
+        writeInput(o.member ? o.key + "|" + o.member : o.key);
+        const t1 = performance.now();
+        if (exports.fml_patch(o.t, r.value) === 0) {
+          syncPatchResult(readResult(), (performance.now() - t1) * 1000, "goal-seek applied (grid→text)");
+        } else {
+          // Not literal-editable (e.g. a distribution input): runtime only.
+          writeInput(o.key);
+          exports.fml_set(o.t, r.value);
+          if (exports.fml_recalc() === 0) {
+            const r2 = readResult();
+            stats(r2, (performance.now() - t1) * 1000, "goal-seek applied (runtime only)");
+            render(r2);
+          }
+        }
+        document.getElementById("inspect")?.remove();
+        clearHl();
+        inspectStack = [];
+      });
+    });
   });
   const tb = div.querySelector("#tornBtn");
   if (tb) tb.addEventListener("click", () => {

@@ -58,6 +58,20 @@ pub struct SimResult {
     pub cells: Vec<(String, bool, Vec<[f64; 3]>)>,
 }
 
+/// Solution of a goal-seek: the input value found, the output actually
+/// achieved at that value, and how many model evaluations it took.
+#[derive(Clone, Copy, Debug)]
+pub struct GoalSeekResult {
+    pub value: f64,
+    pub achieved: f64,
+    pub iterations: usize,
+}
+
+/// Reconstruct the achieved output from a residual (f = output - target).
+fn a_target(f: f64, target: f64) -> f64 {
+    f + target
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct RecalcStats {
     pub steps_total: usize,
@@ -770,6 +784,88 @@ impl Session {
             0
         };
         Ok(self.values[m][mb][slot])
+    }
+
+    /// Goal-seek (the IFPS classic): find the value of `input` that makes
+    /// `output` equal `target`. Safeguarded secant iteration over runtime
+    /// values only — the model is fully restored afterwards; committing
+    /// the solution is the caller's decision (e.g. via `patch_input`).
+    pub fn goal_seek(
+        &mut self,
+        input: &str,
+        in_member: Option<&str>,
+        in_period: Option<usize>,
+        output: &str,
+        out_member: Option<&str>,
+        out_period: Option<usize>,
+        target: f64,
+    ) -> Result<GoalSeekResult, String> {
+        let m = *self
+            .checked
+            .index
+            .get(input)
+            .ok_or_else(|| format!("unknown measure '{input}'"))?;
+        if !self.checked.measures[m].is_input {
+            return Err(format!("'{input}' is not an input — goal-seek adjusts inputs"));
+        }
+        let read_p = if self.checked.measures[m].is_series {
+            Some(in_period.unwrap_or(self.checked.measures[m].range.0))
+        } else {
+            None
+        };
+        let x0 = self.get(input, in_member, read_p)?;
+        let saved_values = self.values.clone();
+        let saved_dirty = self.dirty.clone();
+        let mut evals = 0usize;
+        let result = (|| -> Result<GoalSeekResult, String> {
+            let mut eval_at = |s: &mut Self, x: f64| -> Result<f64, String> {
+                evals += 1;
+                s.set_input(input, in_member, in_period, x)?;
+                s.recalc()?;
+                s.get(output, out_member, out_period)
+            };
+            let scale = x0.abs().max(1e-6);
+            let tol = target.abs().max(1.0) * 1e-9;
+            let mut a = x0;
+            let mut fa = eval_at(self, a)? - target;
+            if fa.abs() <= tol {
+                return Ok(GoalSeekResult { value: a, achieved: a_target(fa, target), iterations: evals });
+            }
+            let mut b = if x0 != 0.0 { x0 * 1.05 } else { 0.1 * scale };
+            let mut fb = eval_at(self, b)? - target;
+            if fa == fb {
+                return Err(format!("'{output}' does not respond to '{input}' — pick a lever it depends on"));
+            }
+            for _ in 0..64 {
+                if fb.abs() <= tol || (b - a).abs() <= scale * 1e-12 {
+                    return Ok(GoalSeekResult { value: b, achieved: a_target(fb, target), iterations: evals });
+                }
+                let denom = fb - fa;
+                if denom.abs() < 1e-300 {
+                    return Err(format!("goal-seek stalled: '{output}' stopped responding near {b}"));
+                }
+                // Secant step, clamped to avoid wild leaps through solves.
+                let mut c = b - fb * (b - a) / denom;
+                if !c.is_finite() {
+                    return Err("goal-seek diverged (non-finite step)".into());
+                }
+                let max_step = 100.0 * scale.max(b.abs());
+                if (c - b).abs() > max_step {
+                    c = b + max_step * (c - b).signum();
+                }
+                a = b;
+                fa = fb;
+                b = c;
+                fb = eval_at(self, b)? - target;
+            }
+            Err(format!(
+                "goal-seek did not converge in 64 iterations (last: {input} = {b}, {output} = {})",
+                fb + target
+            ))
+        })();
+        self.values = saved_values;
+        self.dirty = saved_dirty;
+        result
     }
 
     /// Map a 1-based line of the flat source to (owning file, local line)
