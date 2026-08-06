@@ -61,8 +61,91 @@ impl Dist {
     }
 }
 
+/// Standard normal CDF via Abramowitz–Stegun 7.1.26 (|err| < 1.5e-7) —
+/// the forward map of the Gaussian copula used by `correlate`.
+pub(crate) fn norm_cdf(z: f64) -> f64 {
+    let x = z / std::f64::consts::SQRT_2;
+    let t = 1.0 / (1.0 + 0.3275911 * x.abs());
+    let poly = ((((1.061405429 * t - 1.453152027) * t + 1.421413741) * t - 0.284496736) * t
+        + 0.254829592)
+        * t;
+    let erf = 1.0 - poly * (-x * x).exp();
+    0.5 * (1.0 + if x >= 0.0 { erf } else { -erf })
+}
+
+/// Cholesky factor (row-major lower L) of a symmetric matrix; None if the
+/// matrix is not positive definite — i.e. the declared correlations are
+/// mutually inconsistent.
+pub(crate) fn cholesky(a: &[f64], n: usize) -> Option<Vec<f64>> {
+    let mut l = vec![0.0; n * n];
+    for i in 0..n {
+        for j in 0..=i {
+            let mut s = a[i * n + j];
+            for k in 0..j {
+                s -= l[i * n + k] * l[j * n + k];
+            }
+            if i == j {
+                if s <= 1e-12 {
+                    return None;
+                }
+                l[i * n + i] = s.sqrt();
+            } else {
+                l[i * n + j] = s / l[j * n + j];
+            }
+        }
+    }
+    Some(l)
+}
+
+/// Connected components of `correlate` pairs over the distribution inputs
+/// (each returned group sorted by measure index; singletons included).
+pub(crate) fn corr_groups(dist_ms: &[usize], correlations: &[(usize, usize, f64)]) -> Vec<Vec<usize>> {
+    let mut groups: Vec<Vec<usize>> = Vec::new();
+    let mut placed: Vec<usize> = Vec::new();
+    for &m in dist_ms {
+        if placed.contains(&m) {
+            continue;
+        }
+        let mut comp = vec![m];
+        placed.push(m);
+        let mut i = 0;
+        while i < comp.len() {
+            let cur = comp[i];
+            for &(a, b, _) in correlations {
+                let other = if a == cur { b } else if b == cur { a } else { continue };
+                if dist_ms.contains(&other) && !placed.contains(&other) {
+                    placed.push(other);
+                    comp.push(other);
+                }
+            }
+            i += 1;
+        }
+        comp.sort_unstable();
+        groups.push(comp);
+    }
+    groups
+}
+
+/// Row-major correlation matrix for one group: 1s diagonal, declared rhos.
+pub(crate) fn corr_matrix(group: &[usize], correlations: &[(usize, usize, f64)]) -> Vec<f64> {
+    let n = group.len();
+    let mut mat = vec![0.0; n * n];
+    for i in 0..n {
+        mat[i * n + i] = 1.0;
+    }
+    for &(a, b, rho) in correlations {
+        if let (Some(i), Some(j)) =
+            (group.iter().position(|&m| m == a), group.iter().position(|&m| m == b))
+        {
+            mat[i * n + j] = rho;
+            mat[j * n + i] = rho;
+        }
+    }
+    mat
+}
+
 /// Acklam's rational approximation of the inverse normal CDF.
-fn inv_norm(p: f64) -> f64 {
+pub(crate) fn inv_norm(p: f64) -> f64 {
     const A: [f64; 6] = [-3.969683028665376e1, 2.209460984245205e2, -2.759285104469687e2, 1.383577518672690e2, -3.066479806614716e1, 2.506628277459239];
     const B: [f64; 5] = [-5.447609879822406e1, 1.615858368580409e2, -1.556989798598866e2, 6.680131188771972e1, -1.328068155288572e1];
     const C: [f64; 6] = [-7.784894002430293e-3, -3.223964580411365e-1, -2.400758277161838, -2.549732539343734, 4.374664141464968, 2.938163982698783];
@@ -95,6 +178,9 @@ pub struct MeasureInfo {
     pub init: Option<Expr>,
     pub body: Body,
     pub dist: Option<Dist>,
+    /// `per period`: fresh draw every period during `simulate` (iid
+    /// shocks) instead of one draw per trial (parameter uncertainty).
+    pub dist_per_period: bool,
     pub solve: Option<usize>,
     pub line: usize,
 }
@@ -156,6 +242,8 @@ pub struct Checked {
     pub nodes: Vec<(usize, usize, usize)>,
     pub edges: Vec<Vec<usize>>,
     pub node_id: HashMap<(usize, usize, usize), usize>,
+    /// Validated `correlate` pairs: (measure a, measure b, rho) with a < b.
+    pub correlations: Vec<(usize, usize, f64)>,
 }
 
 impl Checked {
@@ -404,6 +492,7 @@ pub fn check(model: &Model) -> Result<Checked, String> {
                 init: m.init.as_ref().map(|(_, e)| e.clone()),
                 body: m.body.clone(),
                 dist: None, // fitted below (needs the unit checker's helpers)
+                dist_per_period: false,
                 solve,
                 line: m.line,
             });
@@ -837,6 +926,7 @@ pub fn check(model: &Model) -> Result<Checked, String> {
         let median = dist.median();
         measures[i].body = Body::Expr(Expr::Num(median));
         measures[i].dist = Some(dist);
+        measures[i].dist_per_period = dd.per_period;
     }
 
     // ---- unit checking -----------------------------------------------------
@@ -1376,6 +1466,92 @@ pub fn check(model: &Model) -> Result<Checked, String> {
         sites
     };
 
+    // ---- distributions: per-period + correlate validation ------------------
+    for m in &measures {
+        if m.dist_per_period && !m.is_series {
+            return Err(format!(
+                "line {}: 'per period' needs a series input — give '{}' an 'over' clause",
+                m.line, m.name
+            ));
+        }
+    }
+    let mut correlations: Vec<(usize, usize, f64)> = Vec::new();
+    for c in &model.correlations {
+        fn lit_num(e: &crate::ast::Expr) -> Option<f64> {
+            match e {
+                Expr::Num(v) => Some(*v),
+                Expr::Pct(v) => Some(*v),
+                Expr::Neg(inner) => lit_num(inner).map(|v| -v),
+                _ => None,
+            }
+        }
+        let resolve = |n: &str| -> Result<usize, String> {
+            let m = *index
+                .get(n)
+                .ok_or_else(|| format!("line {}: correlate: unknown measure '{n}'", c.line))?;
+            if measures[m].dist.is_none() {
+                return Err(format!(
+                    "line {}: correlate: '{n}' has no '~' distribution",
+                    c.line
+                ));
+            }
+            Ok(m)
+        };
+        let (ma, mb) = (resolve(&c.a)?, resolve(&c.b)?);
+        if ma == mb {
+            return Err(format!("line {}: correlate needs two distinct inputs", c.line));
+        }
+        if measures[ma].dist_per_period != measures[mb].dist_per_period {
+            return Err(format!(
+                "line {}: correlate: '{}' and '{}' draw at different frequencies — both or neither must be 'per period'",
+                c.line, c.a, c.b
+            ));
+        }
+        if measures[ma].dist_per_period && measures[ma].range != measures[mb].range {
+            return Err(format!(
+                "line {}: correlate: per-period inputs '{}' and '{}' must share the same range",
+                c.line, c.a, c.b
+            ));
+        }
+        let rho = lit_num(&c.rho).ok_or_else(|| {
+            format!("line {}: correlation must be a numeric literal", c.line)
+        })?;
+        if rho.abs() >= 1.0 {
+            return Err(format!(
+                "line {}: correlation must be within (-1, 1), got {rho}",
+                c.line
+            ));
+        }
+        let key = (ma.min(mb), ma.max(mb));
+        if correlations.iter().any(|(x, y, _)| (*x, *y) == key) {
+            return Err(format!(
+                "line {}: duplicate correlate for '{}' and '{}'",
+                c.line, c.a, c.b
+            ));
+        }
+        correlations.push((key.0, key.1, rho));
+    }
+    // Every correlated group's matrix must be positive definite — fail at
+    // compile time, not mid-simulation.
+    {
+        let dist_ms: Vec<usize> = measures
+            .iter()
+            .enumerate()
+            .filter(|(_, m)| m.dist.is_some())
+            .map(|(i, _)| i)
+            .collect();
+        for group in corr_groups(&dist_ms, &correlations) {
+            if group.len() > 1 && cholesky(&corr_matrix(&group, &correlations), group.len()).is_none() {
+                let names: Vec<&str> =
+                    group.iter().map(|&m| measures[m].name.as_str()).collect();
+                return Err(format!(
+                    "the correlations among {} are mutually inconsistent (matrix not positive definite) — lower them",
+                    names.join(", ")
+                ));
+            }
+        }
+    }
+
     Ok(Checked {
         model_name: model.name.clone(),
         unit_reg,
@@ -1396,6 +1572,7 @@ pub fn check(model: &Model) -> Result<Checked, String> {
         nodes,
         edges,
         node_id,
+        correlations,
     })
 }
 

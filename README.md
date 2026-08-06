@@ -218,10 +218,24 @@ The scheduler generalizes to the (measure × member × period) micro-graph.
   certain), forecast months fan out (`tests/simulate.rs`). Distribution
   inputs are excluded from the tornado — sensitivity, scenario, and
   simulation stay distinct constructs, as the literature demands.
-- Still ahead: full lossless
-  CST, salsa memoization, LSP, exact decimals, read-side information-flow
-  control, real authentication, correlation between distribution inputs
-  (SLURP-style), per-period independent draws.
+- **Correlation + per-period draws** — `correlate growth, margin = 0.7`
+  turns independent samples into coherent trial vectors via a Gaussian
+  copula (Cholesky over the declared pair matrix, validated
+  positive-definite at compile time), while every input's marginal stays
+  exactly as assessed — the SLURP posture. `~ normal(0, 1) per period`
+  draws a fresh shock each period (iid) instead of one draw per trial
+  (parameter uncertainty); mixing frequencies inside one correlated group
+  is a compile error. Statistical structure is tested through the model
+  (`tests/correlate.rs`): N(0,1) sum/difference percentile widths land on
+  their closed-form values, marginals survive the copula,
+  anti-correlation narrows sums, and all seven misuse forms fail at
+  compile time. In the rolling demo, margin is now `~ normal(22%, 2%)`
+  correlated 0.7 with growth: January profit is banded (margin
+  uncertainty applies to booked months too) while January sales stays
+  certain.
+- Still ahead: full lossless CST, salsa memoization, LSP, exact decimals,
+  read-side information-flow control, real authentication, goal-seek,
+  allocate primitive, provenance ("explain this number").
 
 ## Layout
 

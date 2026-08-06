@@ -43,16 +43,22 @@ fn simulate_produces_reproducible_bands() {
     assert_eq!(s.get("fy_profit", None, None).unwrap(), base_fy);
 
     // fy_profit bands: p10 < p50 < p90, median near the deterministic value
-    // (actuals dominate H1, so the spread is moderate).
+    // (growth and margin are correlated 0.7, which shifts the product's
+    // median slightly off the median product — allow a few percent).
     let fy = sim1.cells.iter().find(|c| c.0 == "fy_profit").unwrap();
     let [p10, p50, p90] = fy.2[0];
     assert!(p10 < p50 && p50 < p90, "bands ordered: {p10} {p50} {p90}");
-    assert!((p50 - base_fy).abs() / base_fy < 0.01, "median near deterministic");
-    // Closed months have zero spread — actuals are certain.
-    let jan = sim1.cells.iter().find(|c| c.0 == "profit").unwrap();
-    let [a10, _, a90] = jan.2[0];
-    assert!((a90 - a10).abs() < 1e-9, "January profit is certain");
-    // December is uncertain.
-    let [d10, _, d90] = jan.2[11];
-    assert!(d90 - d10 > 0.0, "December profit carries growth uncertainty");
+    assert!((p50 - base_fy).abs() / base_fy < 0.03, "median near deterministic");
+    // Closed months' SALES have zero spread — actuals are certain.
+    let sales = sim1.cells.iter().find(|c| c.0 == "sales").unwrap();
+    let [a10, _, a90] = sales.2[0];
+    assert!((a90 - a10).abs() < 1e-9, "January sales is a booked actual");
+    // December sales is uncertain (growth compounds through H2).
+    let [d10, _, d90] = sales.2[11];
+    assert!(d90 - d10 > 0.0, "December sales carries growth uncertainty");
+    // Profit is banded even in January: margin uncertainty applies to
+    // every month, actual or not.
+    let profit = sim1.cells.iter().find(|c| c.0 == "profit").unwrap();
+    let [j10, _, j90] = profit.2[0];
+    assert!(j90 - j10 > 0.0, "January profit carries margin uncertainty");
 }

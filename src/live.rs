@@ -270,15 +270,49 @@ impl Session {
     /// Returns per-cell [p10, p50, p90] for every computed series/scalar.
     /// Base (median) values are restored afterwards.
     pub fn simulate(&mut self, trials: usize) -> Result<SimResult, String> {
-        let dist_inputs: Vec<(usize, crate::check::Dist)> = self
+        use crate::check::{cholesky, corr_groups, corr_matrix, inv_norm, norm_cdf};
+        let dist_inputs: Vec<usize> = self
             .checked
             .measures
             .iter()
             .enumerate()
-            .filter_map(|(i, m)| m.dist.clone().map(|d| (i, d)))
+            .filter_map(|(i, m)| m.dist.as_ref().map(|_| i))
             .collect();
         if dist_inputs.is_empty() {
             return Err("no distribution inputs — declare one with '~ metalog {…}' / '~ uniform(a,b)'".into());
+        }
+        // Correlation groups (Gaussian copula): the Cholesky factor turns
+        // independent draws into coherent trial vectors while each input's
+        // marginal stays exactly as assessed. Singletons keep the direct
+        // uniform path (bit-identical to the uncorrelated engine).
+        struct Group {
+            ms: Vec<usize>,
+            ks: Vec<usize>,
+            l: Option<Vec<f64>>,
+            per_period: bool,
+            range: (usize, usize),
+        }
+        let mut groups: Vec<Group> = Vec::new();
+        for g in corr_groups(&dist_inputs, &self.checked.correlations) {
+            let l = if g.len() > 1 {
+                Some(
+                    cholesky(&corr_matrix(&g, &self.checked.correlations), g.len())
+                        .ok_or("correlation matrix is not positive definite")?,
+                )
+            } else {
+                None
+            };
+            let ks = g
+                .iter()
+                .map(|m| dist_inputs.iter().position(|x| x == m).unwrap())
+                .collect();
+            groups.push(Group {
+                per_period: self.checked.measures[g[0]].dist_per_period,
+                range: self.checked.measures[g[0]].range,
+                ms: g,
+                ks,
+                l,
+            });
         }
         let saved_values = self.values.clone();
         let saved_dirty = self.dirty.clone();
@@ -298,13 +332,51 @@ impl Session {
             z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
             z ^ (z >> 31)
         }
+        // Raw uniform for (input k, trial, optional period). With t = None
+        // this is the original per-trial seed path, unchanged.
+        let u_raw = |k: usize, trial: usize, t: Option<usize>| -> f64 {
+            let mut s = splitmix(((k as u64 + 1) << 32) ^ (trial as u64 + 1));
+            if let Some(t) = t {
+                s = splitmix(s ^ (t as u64 + 1).wrapping_mul(0x9E3779B97F4A7C15));
+            }
+            (s >> 11) as f64 / (1u64 << 53) as f64
+        };
         let result = (|| -> Result<(), String> {
             for trial in 0..trials {
-                for (k, (m, dist)) in dist_inputs.iter().enumerate() {
-                    let seed = ((k as u64 + 1) << 32) ^ (trial as u64 + 1);
-                    let u = (splitmix(seed) >> 11) as f64 / (1u64 << 53) as f64;
-                    let name = self.checked.measures[*m].name.clone();
-                    self.set_input(&name, None, None, dist.quantile(u))?;
+                for g in &groups {
+                    let times: Vec<Option<usize>> = if g.per_period {
+                        (g.range.0..=g.range.1).map(Some).collect()
+                    } else {
+                        vec![None]
+                    };
+                    for &t in &times {
+                        match &g.l {
+                            None => {
+                                let (m, k) = (g.ms[0], g.ks[0]);
+                                let name = self.checked.measures[m].name.clone();
+                                let dist = self.checked.measures[m].dist.clone().unwrap();
+                                self.set_input(&name, None, t, dist.quantile(u_raw(k, trial, t)))?;
+                            }
+                            Some(l) => {
+                                let n = g.ms.len();
+                                let z: Vec<f64> = g
+                                    .ks
+                                    .iter()
+                                    .map(|&k| inv_norm(u_raw(k, trial, t).clamp(1e-12, 1.0 - 1e-12)))
+                                    .collect();
+                                for i in 0..n {
+                                    let mut zi = 0.0;
+                                    for j in 0..=i {
+                                        zi += l[i * n + j] * z[j];
+                                    }
+                                    let m = g.ms[i];
+                                    let name = self.checked.measures[m].name.clone();
+                                    let dist = self.checked.measures[m].dist.clone().unwrap();
+                                    self.set_input(&name, None, t, dist.quantile(norm_cdf(zi)))?;
+                                }
+                            }
+                        }
+                    }
                 }
                 self.recalc()?;
                 for m in 0..n_measures {

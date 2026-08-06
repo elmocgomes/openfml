@@ -20,10 +20,10 @@ pub struct Parser {
 }
 
 const DIMLESS_ALIASES: [&str; 2] = ["rate", "ratio"];
-const KEYWORDS: [&str; 29] = [
+const KEYWORDS: [&str; 31] = [
     "model", "calendar", "currency", "unit", "input", "solve", "assert", "period",
     "over", "init", "tolerance", "max_iterations", "prev", "relax", "when", "match", "in",
-    "dimension", "functional", "at", "eliminate", "against", "scenario", "from", "actuals", "until", "metalog", "uniform", "normal",
+    "dimension", "functional", "at", "eliminate", "against", "scenario", "from", "actuals", "until", "metalog", "uniform", "normal", "correlate", "per",
 ];
 
 fn lit_kind(e: &Expr) -> Option<LitKind> {
@@ -210,6 +210,7 @@ impl Parser {
             items: Vec::new(),
             scenarios: Vec::new(),
             edit_sites: Vec::new(),
+            correlations: Vec::new(),
         };
         while self.peek().is_some() {
             match self.peek_ident() {
@@ -358,6 +359,16 @@ impl Parser {
                     self.site_buf.clear();
                     model.scenarios.push(ScenarioDecl { name, from, overrides, line });
                 }
+                Some("correlate") => {
+                    let line = self.line();
+                    self.pos += 1;
+                    let a = self.expect_ident()?;
+                    self.expect_sym(",")?;
+                    let b = self.expect_ident()?;
+                    self.expect_sym("=")?;
+                    let rho = self.expr()?;
+                    model.correlations.push(CorrDecl { a, b, rho, line });
+                }
                 Some("eliminate") => {
                     let line = self.line();
                     self.pos += 1;
@@ -502,6 +513,16 @@ impl Parser {
                     ))
                 }
             }
+            // `per period`: an independent draw each period (iid shocks)
+            // rather than one draw per trial (parameter uncertainty).
+            let per_period = if self.eat_kw("per") {
+                if !self.eat_kw("period") {
+                    return Err(format!("line {}: expected 'per period'", self.line()));
+                }
+                true
+            } else {
+                false
+            };
             self.site_buf.clear();
             return Ok(MeasureDecl {
                 name,
@@ -512,7 +533,7 @@ impl Parser {
                 // Placeholder; the checker substitutes the median so the
                 // model stays deterministic until `simulate` is invoked.
                 body: Body::Expr(Expr::Num(f64::NAN)),
-                dist: Some(DistDecl { kind, params }),
+                dist: Some(DistDecl { kind, params, per_period }),
                 line,
             });
         }

@@ -36,21 +36,20 @@ fn tornado_ranks_drivers_by_impact() {
     let base = s.get("fy_profit", None, None).unwrap();
     let bars = s.tornado("fy_profit", None, None, 0.10).unwrap();
     assert!(!bars.is_empty());
-    // margin scales ALL profit — it must outrank any single actual month.
-    assert!(bars[0].0.starts_with("margin"), "top driver: {}", bars[0].0);
-    // ±10% on margin moves fy_profit by exactly ±10%.
-    assert!((bars[0].2 - base * 0.10).abs() < 1e-6, "up = {}", bars[0].2);
-    assert!((bars[0].1 + base * 0.10).abs() < 1e-6, "down = {}", bars[0].1);
-    // The session is fully restored afterwards.
-    assert_eq!(s.get("fy_profit", None, None).unwrap(), base);
     // The rolling-forecast lesson, discovered by the tornado itself: the
     // LAST ACTUAL (June) re-bases the whole forecast, so it outranks every
     // earlier actual month (which only move their own period).
+    assert!(bars[0].0.contains("2026-06"), "top driver: {}", bars[0].0);
     let june_rank = bars.iter().position(|b| b.0.contains("2026-06")).unwrap();
     let jan_rank = bars.iter().position(|b| b.0.contains("2026-01")).unwrap();
     assert!(june_rank < jan_rank, "June must outrank January");
-    // growth is now a DISTRIBUTION input: its uncertainty belongs to
-    // `simulate`, not the tornado — it must not appear as a bar.
-    assert!(bars.iter().all(|b| !b.0.starts_with("growth")),
-        "distribution inputs are not tornado-perturbable");
+    // The session is fully restored afterwards.
+    assert_eq!(s.get("fy_profit", None, None).unwrap(), base);
+    // growth and margin are DISTRIBUTION inputs now (and correlated):
+    // their uncertainty belongs to `simulate`, not the tornado — neither
+    // may appear as a bar.
+    assert!(
+        bars.iter().all(|b| !b.0.starts_with("growth") && !b.0.starts_with("margin")),
+        "distribution inputs are not tornado-perturbable"
+    );
 }

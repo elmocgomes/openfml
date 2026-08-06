@@ -161,6 +161,9 @@ pub struct DistDecl {
     pub kind: String,
     /// (optional key, param) — keyed for metalog, positional otherwise.
     pub params: Vec<(Option<String>, Expr)>,
+    /// `per period`: an independent draw each period (iid shocks) instead
+    /// of one draw per trial (parameter uncertainty). Series inputs only.
+    pub per_period: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -300,6 +303,17 @@ pub struct Model {
     pub items: Vec<Item>,
     pub scenarios: Vec<ScenarioDecl>,
     pub edit_sites: Vec<EditSite>,
+    /// `correlate a, b = rho` — rank-preserving dependence between two
+    /// distribution inputs (Gaussian copula; marginals stay exact).
+    pub correlations: Vec<CorrDecl>,
+}
+
+#[derive(Clone, Debug)]
+pub struct CorrDecl {
+    pub a: String,
+    pub b: String,
+    pub rho: Expr,
+    pub line: usize,
 }
 
 impl Model {
