@@ -22,6 +22,10 @@
   #scen button.on { border-color:#b8860b; color:#b8860b; font-weight:600; }
   #file button { font:inherit; padding:.15rem .55rem; border:1px solid var(--edge);
     background:transparent; border-radius:5px; cursor:pointer; }
+  #ftabs { display:flex; gap:.3rem; padding:.35rem .75rem 0; flex-wrap:wrap; }
+  #ftabs button { font:inherit; font-size:.85em; padding:.12rem .5rem; border:1px solid var(--edge);
+    border-bottom:0; background:transparent; border-radius:6px 6px 0 0; cursor:pointer; opacity:.7; }
+  #ftabs button.on { border-color: var(--accent); color: var(--accent); opacity:1; font-weight:600; }
   #draftState { font-size:.85em; opacity:.7; margin-left:.4rem; }
   #draftState button { border:none; text-decoration:underline; padding:0; margin-left:.3rem; }
   td.dup { background: rgba(42,157,58,.18); } td.ddown { background: rgba(221,51,51,.14); }
@@ -83,6 +87,7 @@
 </header>
 <main>
   <div id="left">
+    <div id="ftabs" style="display:none"></div>
     <textarea id="src" spellcheck="false"></textarea>
     <div id="err"></div>
   </div>
@@ -90,7 +95,7 @@
 </main>
 <div id="foot"><span id="asserts"></span><span><span class="lbl">scalars:</span><span id="scalars"></span></span></div>
 <script type="module">
-const MODELS = ["rolling", "budget", "finplan", "solar_pf", "fx_consol"];
+const MODELS = ["rolling", "budget", "team_budget", "finplan", "solar_pf", "fx_consol"];
 const enc = new TextEncoder(), dec = new TextDecoder();
 let exports, prev = {}, current = "finplan", loadedOk = false;
 let baseVals = {}, activeScen = "Base";
@@ -105,17 +110,23 @@ function authorized(measure, member) {
     g.measure === "*" ||
     (g.measure === measure && (g.member === null || g.member === member)));
 }
-let diskText = "";
-const draftKey = () => "fml:draft:" + current;
-function saveDraft() {
-  const v = document.getElementById("src").value;
-  if (v === diskText) {
-    localStorage.removeItem(draftKey());
+// ---- multi-file state: main + any included files, with per-file drafts ----
+let fileTexts = {}, diskTexts = {}, activeFile = "";
+const mainFile = () => current + ".fml";
+// Main keeps the legacy draft key so pre-tabs drafts survive.
+const draftKey = (f) => {
+  f = f || activeFile;
+  return f === mainFile() ? "fml:draft:" + current : "fml:draft:" + current + ":" + f;
+};
+function saveDraftFor(name) {
+  if (fileTexts[name] === diskTexts[name]) {
+    localStorage.removeItem(draftKey(name));
   } else {
-    localStorage.setItem(draftKey(), v);
+    localStorage.setItem(draftKey(name), fileTexts[name]);
   }
   updateDraftState();
 }
+function saveDraft() { saveDraftFor(activeFile); }
 function updateDraftState() {
   const el = document.getElementById("draftState");
   const has = localStorage.getItem(draftKey()) !== null;
@@ -125,14 +136,34 @@ function updateDraftState() {
   const rb = document.getElementById("revertBtn");
   if (rb) rb.addEventListener("click", () => {
     localStorage.removeItem(draftKey());
-    document.getElementById("src").value = diskText;
+    fileTexts[activeFile] = diskTexts[activeFile];
+    document.getElementById("src").value = fileTexts[activeFile];
     updateDraftState();
-    load(diskText, "revert");
+    loadModel("revert");
   });
 }
+function renderTabs() {
+  const box = document.getElementById("ftabs");
+  const names = Object.keys(fileTexts);
+  box.style.display = names.length > 1 ? "flex" : "none";
+  box.innerHTML = "";
+  if (names.length <= 1) return;
+  for (const n of names) {
+    const b = document.createElement("button");
+    b.textContent = n + (localStorage.getItem(draftKey(n)) !== null ? " •" : "");
+    b.classList.toggle("on", n === activeFile);
+    b.addEventListener("click", () => {
+      activeFile = n;
+      srcBox.value = fileTexts[n];
+      renderTabs();
+      updateDraftState();
+    });
+    box.appendChild(b);
+  }
+}
 async function saveToDisk() {
-  const text = document.getElementById("src").value;
-  const name = current + ".fml";
+  const text = fileTexts[activeFile] ?? document.getElementById("src").value;
+  const name = activeFile || current + ".fml";
   if (window.showSaveFilePicker) {
     try {
       const h = await showSaveFilePicker({
@@ -274,12 +305,20 @@ function render(r) {
       if (exports.fml_patch(Number(inp.dataset.t), v) === 0) {
         const r2 = readResult();
         stats(r2, (performance.now() - t0) * 1000, "grid→text patch + recalc");
-        if (r2.src !== undefined && r2.src !== srcBox.value) {
-          const top = srcBox.scrollTop;
-          srcBox.value = r2.src;       // the grid edit rewrote the source
-          srcBox.scrollTop = top;
-          saveDraft();
-        }
+        // The grid edit rewrote exactly one file — sync it (files[0] = main).
+        (r2.files || []).forEach((f, i) => {
+          const key = i === 0 ? mainFile() : f.name;
+          if (fileTexts[key] !== f.src) {
+            fileTexts[key] = f.src;
+            saveDraftFor(key);
+            if (key === activeFile) {
+              const top = srcBox.scrollTop;
+              srcBox.value = f.src;
+              srcBox.scrollTop = top;
+            }
+          }
+        });
+        renderTabs();
         render(r2);
       } else {
         setErr(readResult().error);
@@ -294,23 +333,48 @@ function setErr(msg) {
   // A failed compile means the grid shows the LAST GOOD model — dim it.
   document.getElementById("right").classList.toggle("stale", !!msg);
 }
-function load(srcText, what) {
-  writeInput(srcText);
-  const t0 = performance.now();
-  const rc = exports.fml_load();
-  const r = readResult();
-  if (rc !== 0) {
-    setErr(r.error + "   (grid shows the last valid model)");
-    loadedOk = false;
-    return;
+// Compile the multi-file model: provide every known file to the wasm side,
+// load the main file, and fetch any include the model asks for on demand.
+async function loadModel(what) {
+  for (let tries = 0; tries < 12; tries++) {
+    for (const [n, t] of Object.entries(fileTexts)) {
+      if (n === mainFile()) continue;
+      writeInput(n + "\n" + t);
+      exports.fml_file();
+    }
+    writeInput(fileTexts[mainFile()]);
+    const t0 = performance.now();
+    const rc = exports.fml_load();
+    const r = readResult();
+    if (rc === 0) {
+      loadedOk = true;
+      setErr("");
+      prev = {};
+      baseVals = {};
+      activeScen = "Base";
+      stats(r, (performance.now() - t0) * 1000, what);
+      renderTabs();
+      render(r);
+      return;
+    }
+    const miss = /include "([^"]+)" is not loaded/.exec(r.error || "");
+    if (!miss) {
+      setErr(r.error + "   (grid shows the last valid model)");
+      loadedOk = false;
+      renderTabs();
+      return;
+    }
+    const resp = await fetch(miss[1] + "?v=" + Date.now());
+    if (!resp.ok) {
+      setErr(`cannot fetch include "${miss[1]}" (HTTP ${resp.status})`);
+      loadedOk = false;
+      return;
+    }
+    diskTexts[miss[1]] = await resp.text();
+    const d = localStorage.getItem(draftKey(miss[1]));
+    fileTexts[miss[1]] = d !== null ? d : diskTexts[miss[1]];
   }
-  loadedOk = true;
-  setErr("");
-  prev = {};
-  baseVals = {};
-  activeScen = "Base";
-  stats(r, (performance.now() - t0) * 1000, what);
-  render(r);
+  setErr("include resolution did not settle in 12 rounds");
 }
 
 let lastSeq = -1;
@@ -369,12 +433,15 @@ async function switchModel(name) {
   current = name;
   document.querySelectorAll("#models button").forEach(b =>
     b.classList.toggle("on", b.textContent === name));
-  diskText = await (await fetch(name + ".fml?v=" + Date.now())).text();
+  fileTexts = {};
+  diskTexts = {};
+  activeFile = mainFile();
+  diskTexts[activeFile] = await (await fetch(name + ".fml?v=" + Date.now())).text();
   const draft = localStorage.getItem(draftKey());
-  const text = draft !== null ? draft : diskText;
-  srcBox.value = text;
+  fileTexts[activeFile] = draft !== null ? draft : diskTexts[activeFile];
+  srcBox.value = fileTexts[activeFile];
   updateDraftState();
-  load(text, draft !== null ? "draft restored" : "compile+run");
+  await loadModel(draft !== null ? "draft restored" : "compile+run");
 }
 const mbox = document.getElementById("models");
 for (const m of MODELS) {
@@ -389,8 +456,9 @@ let timer = null;
 srcBox.addEventListener("input", () => {
   clearTimeout(timer);
   timer = setTimeout(() => {
+    fileTexts[activeFile] = srcBox.value;
     saveDraft();
-    load(srcBox.value, "recompile");
+    loadModel("recompile");
   }, 350);
 });
 document.getElementById("saveBtn").addEventListener("click", saveToDisk);
@@ -400,7 +468,7 @@ document.getElementById("simBtn").addEventListener("click", () => {
   if (simBands) {                        // exit sim mode
     simBands = null;
     btn.classList.remove("on");
-    load(document.getElementById("src").value, "back to deterministic");
+    loadModel("back to deterministic");
     return;
   }
   const t0 = performance.now();

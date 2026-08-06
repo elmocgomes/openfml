@@ -152,12 +152,22 @@ The scheduler generalizes to the (measure × member × period) micro-graph.
   member's arm in the source, byte-untouched elsewhere, and re-rolls the
   totals incrementally (`tests/budget.rs`: member isolation, broadcast-arm
   semantics, envelope covenant + Squeeze scenario breach).
-- **Multi-file models**: `include "cc_marketing.fml"` — textual expansion
-  with cycle/depth guards, resolved relative to the model file (CLI) or by
-  the host. Each owner owns a file; git merges become structurally
-  conflict-free. Expansion is textual for now (spans/lines refer to the
-  expanded document); per-file span provenance is the follow-up that will
-  bring includes into the workbench write-back path.
+- **Multi-file models**: `include "cc_marketing.fml"` — expansion with
+  cycle/depth guards, resolved relative to the model file (CLI) or by the
+  host. Each owner owns a file; git merges become structurally
+  conflict-free.
+- **Per-file span provenance** — expansion keeps a **source map**
+  (`expand_includes_with_map`): every byte of the expanded document traces
+  back to (file, local offset). `Session::patch_input` routes each grid
+  edit into the file that owns the span — the master file is
+  byte-untouched when a team edits its numbers. The multi-file round-trip
+  theorem is tested: patch + incremental recalc ≡ re-expanding the
+  *patched files* and compiling fresh (`tests/include_patch.rs`). The
+  workbench grew **file tabs**: `models/team_budget.fml` includes three
+  team-owned files; editing a Marketing cell rewrites
+  `team_marketing.fml` only (draft-dot on exactly that tab), included
+  files are fetched on demand, per-file drafts survive reload, and source
+  edits in any tab recompile the whole model.
 - **The collaboration server** (`fml-server`, zero-dependency HTTP) —
   design doc 07 §3 v1: every mutation passes ONE gate — authorize →
   apply → log. **Dimension-subspace write ACLs** from a plain owners file
@@ -208,7 +218,7 @@ The scheduler generalizes to the (measure × member × period) micro-graph.
   certain), forecast months fan out (`tests/simulate.rs`). Distribution
   inputs are excluded from the tornado — sensitivity, scenario, and
   simulation stay distinct constructs, as the literature demands.
-- Still ahead: workbench include support (per-file spans), full lossless
+- Still ahead: full lossless
   CST, salsa memoization, LSP, exact decimals, read-side information-flow
   control, real authentication, correlation between distribution inputs
   (SLURP-style), per-period independent draws.

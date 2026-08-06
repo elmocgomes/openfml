@@ -33,6 +33,10 @@ pub struct Session {
     /// The model source — kept current by `patch_input` (grid → text
     /// write-back via byte-exact span patching).
     src: String,
+    /// The underlying files (files[0] = main) and the source map from flat
+    /// spans back to them — patches are routed to the owning file too.
+    files: Vec<crate::SourceFile>,
+    segments: Vec<crate::Segment>,
     tols: Vec<f64>,
     iterations: Vec<(String, Vec<u32>)>,
     /// Predecessors of each micro-node (inverted edges).
@@ -42,7 +46,23 @@ pub struct Session {
 
 impl Session {
     pub fn new(src: &str) -> Result<Session, String> {
-        let checked = crate::compile(src)?;
+        let files = vec![crate::SourceFile { name: "model".into(), text: src.to_string() }];
+        let segments = vec![crate::Segment { flat_start: 0, flat_end: src.len(), file: 0, local_start: 0 }];
+        Session::from_parts(src.to_string(), files, segments)
+    }
+
+    /// Build a session from an include-expanded multi-file model, keeping
+    /// the source map so grid edits write back into the owning file.
+    pub fn new_expanded(exp: crate::Expanded) -> Result<Session, String> {
+        Session::from_parts(exp.flat, exp.files, exp.segments)
+    }
+
+    fn from_parts(
+        src: String,
+        files: Vec<crate::SourceFile>,
+        segments: Vec<crate::Segment>,
+    ) -> Result<Session, String> {
+        let checked = crate::compile(&src)?;
         let mut values = eval::new_values(&checked);
         eval::init_inputs(&checked, &mut values)?;
         let tols = eval::compute_tols(&checked, &mut values)?;
@@ -60,7 +80,9 @@ impl Session {
         Ok(Session {
             checked,
             values,
-            src: src.to_string(),
+            src,
+            files,
+            segments,
             tols,
             iterations,
             preds,
@@ -235,6 +257,12 @@ impl Session {
 
     pub fn source(&self) -> &str {
         &self.src
+    }
+
+    /// The underlying source files (files[0] = main), kept current by
+    /// `patch_input` — grid edits land in the file that owns the span.
+    pub fn files(&self) -> &[crate::SourceFile] {
+        &self.files
     }
 
     /// Monte Carlo over the model's distribution inputs (SIPmath posture:
@@ -548,8 +576,34 @@ impl Session {
             LitKind::Pct => format!("{}%", fmt_plain(value * 100.0)),
             LitKind::Qty(u) => format!("{} {u}", fmt_plain(value)),
         };
-        self.src.replace_range(span.0..span.1, &rep);
         let old_len = span.1 - span.0;
+        // Route the patch to the owning source file (span provenance): find
+        // the segment containing the span and splice the same bytes there.
+        let seg = self
+            .segments
+            .iter()
+            .position(|s| span.0 >= s.flat_start && span.1 <= s.flat_end)
+            .ok_or_else(|| "edit span is not traceable to a source file".to_string())?;
+        let (owner, local) = {
+            let s = &self.segments[seg];
+            (s.file, span.0 - s.flat_start + s.local_start)
+        };
+        // A file region expanded more than once (same file included twice)
+        // would need multi-site flat patching — refuse rather than desync.
+        for (si, s) in self.segments.iter().enumerate() {
+            if si == seg || s.file != owner {
+                continue;
+            }
+            let hi = s.local_start + (s.flat_end - s.flat_start);
+            if s.local_start < local + old_len && local < hi {
+                return Err(format!(
+                    "\"{}\" is included more than once — not grid-editable",
+                    self.files[owner].name
+                ));
+            }
+        }
+        self.files[owner].text.replace_range(local..local + old_len, &rep);
+        self.src.replace_range(span.0..span.1, &rep);
         let delta = rep.len() as isize - old_len as isize;
         for (_, _, _, sp, _) in self.checked.edit_sites.iter_mut() {
             if sp.0 > span.1 || (sp.0 == span.0 && sp.1 == span.1) {
@@ -559,6 +613,17 @@ impl Session {
                     sp.0 = (sp.0 as isize + delta) as usize;
                     sp.1 = (sp.1 as isize + delta) as usize;
                 }
+            }
+        }
+        for (si, s) in self.segments.iter_mut().enumerate() {
+            if si == seg {
+                s.flat_end = (s.flat_end as isize + delta) as usize;
+            } else if s.flat_start >= span.1 {
+                s.flat_start = (s.flat_start as isize + delta) as usize;
+                s.flat_end = (s.flat_end as isize + delta) as usize;
+            }
+            if s.file == owner && si != seg && s.local_start >= local + old_len {
+                s.local_start = (s.local_start as isize + delta) as usize;
             }
         }
         // Runtime: broadcast sites change every period the literal defines.

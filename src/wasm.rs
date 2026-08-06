@@ -17,6 +17,9 @@ static mut INPUT_BUF: Vec<u8> = Vec::new();
 static mut RESULT: Vec<u8> = Vec::new();
 static mut SESSION: Option<Session> = None;
 static mut ACTIVE_SCENARIO: Option<String> = None;
+/// Include files provided by the host (name → text), used by fml_load's
+/// resolver. The host fetches missing includes on demand and retries.
+static mut FILES: Vec<(String, String)> = Vec::new();
 
 fn set_result(s: String) {
     unsafe {
@@ -167,6 +170,18 @@ pub fn dump_state(session: &mut Session, stats_json: &str, include_src: bool) ->
     out.push(']');
     if include_src {
         out.push_str(&format!(",\"src\":\"{}\"", json_escape(session.source())));
+        out.push_str(",\"files\":[");
+        for (k, f) in session.files().iter().enumerate() {
+            if k > 0 {
+                out.push(',');
+            }
+            out.push_str(&format!(
+                "{{\"name\":\"{}\",\"src\":\"{}\"}}",
+                json_escape(&f.name),
+                json_escape(&f.text)
+            ));
+        }
+        out.push(']');
     }
     out.push('}');
     out
@@ -191,10 +206,51 @@ pub extern "C" fn fml_result_len() -> usize {
     unsafe { RESULT.len() }
 }
 
+/// Provide (or replace) an include file: input buffer = "name\ncontent".
+/// fml_load resolves `include "name"` against the provided set.
+#[no_mangle]
+pub extern "C" fn fml_file() -> i32 {
+    let raw = unsafe { String::from_utf8_lossy(&INPUT_BUF).to_string() };
+    match raw.split_once('\n') {
+        Some((name, content)) => {
+            unsafe {
+                if let Some(slot) = FILES.iter_mut().find(|(n, _)| n == name) {
+                    slot.1 = content.to_string();
+                } else {
+                    FILES.push((name.to_string(), content.to_string()));
+                }
+            }
+            0
+        }
+        None => {
+            set_result("{\"ok\":false,\"error\":\"fml_file expects name\\ncontent\"}".into());
+            1
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn fml_files_clear() {
+    unsafe {
+        FILES.clear();
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn fml_load() -> i32 {
     let src = unsafe { String::from_utf8_lossy(&INPUT_BUF).to_string() };
-    match Session::new(&src) {
+    let expanded = crate::expand_includes_with_map("main", &src, &mut |p: &str| {
+        unsafe { FILES.iter().find(|(n, _)| n == p).map(|(_, t)| t.clone()) }
+            .ok_or_else(|| format!("include \"{p}\" is not loaded"))
+    });
+    let expanded = match expanded {
+        Ok(e) => e,
+        Err(e) => {
+            set_result(format!("{{\"ok\":false,\"error\":\"{}\"}}", json_escape(&e)));
+            return 1;
+        }
+    };
+    match Session::new_expanded(expanded) {
         Ok(mut s) => match s.run_full() {
             Ok(stats) => {
                 let stats_json = format!(
