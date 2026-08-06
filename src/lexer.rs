@@ -148,6 +148,10 @@ pub fn lex(src: &str) -> Result<Vec<SpannedTok>, String> {
                 i += 1;
                 emit!(Tok::Sym("±"));
             }
+            '~' => {
+                i += 1;
+                emit!(Tok::Sym("~"));
+            }
             ':' | '{' | '}' | '(' | ')' | '[' | ']' | ',' | '+' | '-' | '*' | '/' => {
                 let s: &'static str = match c {
                     ':' => ":",

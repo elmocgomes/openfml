@@ -153,6 +153,16 @@ pub enum Body {
     },
 }
 
+/// `~ metalog { p10: 1%, p50: 4%, p90: 9% }` | `~ uniform(a, b)` |
+/// `~ normal(mean, sd)` — a distribution-valued input (SIPmath posture:
+/// deterministic by default at the median; `simulate` runs trials).
+#[derive(Clone, Debug)]
+pub struct DistDecl {
+    pub kind: String,
+    /// (optional key, param) — keyed for metalog, positional otherwise.
+    pub params: Vec<(Option<String>, Expr)>,
+}
+
 #[derive(Clone, Debug)]
 pub struct MeasureDecl {
     pub name: String,
@@ -163,6 +173,7 @@ pub struct MeasureDecl {
     /// `init <period>: <expr>` or `init: <expr>`.
     pub init: Option<(Option<PeriodLit>, Expr)>,
     pub body: Body,
+    pub dist: Option<DistDecl>,
     pub line: usize,
 }
 

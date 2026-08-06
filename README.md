@@ -194,9 +194,24 @@ The scheduler generalizes to the (measure × member × period) micro-graph.
   red/green bars. The demo teaches real economics: for December profit in
   the rolling model, the top driver is the JUNE ACTUAL (it re-bases the
   whole H2 forecast), ahead of margin and growth.
-- Still ahead: distributions (`simulate`), workbench include support
-  (per-file spans), full lossless CST, salsa memoization, LSP, exact
-  decimals, read-side information-flow control, real authentication.
+- **Distributions — the `simulate` leg**, completing the research trio.
+  `input growth : rate ~ metalog { p10: 1%, p50: 3%, p90: 6% }` (3-term
+  Keelin metalog, closed-form fit) plus `~ uniform(a,b)` and
+  `~ normal(mean,sd)`. **Deterministic by default at the median** (the
+  Naylor adoption lesson: what-if first, stochastic as an upgrade in the
+  same artifact). `Session::simulate(n)` runs trial-aligned Monte Carlo
+  with deterministic seeds (SIPmath posture — bit-reproducible
+  everywhere), incremental recalc per trial, full restore, and per-cell
+  [p10, p50, p90]. Workbench: a **simulate** chip switches the grid to
+  band view (p50 with p10…p90 under each cell). 500 trials of the rolling
+  model in 17 ms; actual months show zero-width bands (booked numbers are
+  certain), forecast months fan out (`tests/simulate.rs`). Distribution
+  inputs are excluded from the tornado — sensitivity, scenario, and
+  simulation stay distinct constructs, as the literature demands.
+- Still ahead: workbench include support (per-file spans), full lossless
+  CST, salsa memoization, LSP, exact decimals, read-side information-flow
+  control, real authentication, correlation between distribution inputs
+  (SLURP-style), per-period independent draws.
 
 ## Layout
 

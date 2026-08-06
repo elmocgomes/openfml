@@ -6,7 +6,7 @@ calendar m = monthly 2026-01 .. 2026-12
 period closed = 2026-01 .. 2026-06            // months with booked actuals
 currency kEUR
 
-input growth : rate = 3%
+input growth : rate ~ metalog { p10: 1%, p50: 3%, p90: 6% }
 input sales_act : kEUR flow over closed
     = { 2026-01: 100, 2026-02: 104, 2026-03: 101, 2026-04: 108,
         2026-05: 112, 2026-06: 118 }

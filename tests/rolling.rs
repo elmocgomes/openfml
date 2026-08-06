@@ -44,12 +44,13 @@ fn tornado_ranks_drivers_by_impact() {
     // The session is fully restored afterwards.
     assert_eq!(s.get("fy_profit", None, None).unwrap(), base);
     // The rolling-forecast lesson, discovered by the tornado itself: the
-    // LAST ACTUAL (June) re-bases the whole forecast, so it outranks both
-    // the growth rate and every earlier actual month (which only move
-    // their own period).
+    // LAST ACTUAL (June) re-bases the whole forecast, so it outranks every
+    // earlier actual month (which only move their own period).
     let june_rank = bars.iter().position(|b| b.0.contains("2026-06")).unwrap();
-    let growth_rank = bars.iter().position(|b| b.0.starts_with("growth")).unwrap();
     let jan_rank = bars.iter().position(|b| b.0.contains("2026-01")).unwrap();
-    assert!(june_rank < growth_rank, "June re-bases H2: must outrank growth");
     assert!(june_rank < jan_rank, "June must outrank January");
+    // growth is now a DISTRIBUTION input: its uncertainty belongs to
+    // `simulate`, not the tornado — it must not appear as a bar.
+    assert!(bars.iter().all(|b| !b.0.starts_with("growth")),
+        "distribution inputs are not tornado-perturbable");
 }

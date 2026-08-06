@@ -13,6 +13,13 @@ use crate::check::{Checked, Step};
 use crate::eval::{self, AssertResult, Values};
 use std::collections::HashSet;
 
+#[derive(Clone, Debug)]
+pub struct SimResult {
+    pub trials: usize,
+    /// (display name, is_series, per-slot [p10, p50, p90]).
+    pub cells: Vec<(String, bool, Vec<[f64; 3]>)>,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct RecalcStats {
     pub steps_total: usize,
@@ -228,6 +235,96 @@ impl Session {
 
     pub fn source(&self) -> &str {
         &self.src
+    }
+
+    /// Monte Carlo over the model's distribution inputs (SIPmath posture:
+    /// deterministic seeds → reproducible everywhere; trial-aligned draws).
+    /// Returns per-cell [p10, p50, p90] for every computed series/scalar.
+    /// Base (median) values are restored afterwards.
+    pub fn simulate(&mut self, trials: usize) -> Result<SimResult, String> {
+        let dist_inputs: Vec<(usize, crate::check::Dist)> = self
+            .checked
+            .measures
+            .iter()
+            .enumerate()
+            .filter_map(|(i, m)| m.dist.clone().map(|d| (i, d)))
+            .collect();
+        if dist_inputs.is_empty() {
+            return Err("no distribution inputs — declare one with '~ metalog {…}' / '~ uniform(a,b)'".into());
+        }
+        let saved_values = self.values.clone();
+        let saved_dirty = self.dirty.clone();
+        // Collect trial outcomes for every computed measure cell.
+        let n_measures = self.checked.measures.len();
+        let mut acc: Vec<Vec<Vec<Vec<f64>>>> = (0..n_measures)
+            .map(|m| {
+                let tuples = self.checked.tuple_count(m);
+                let slots = self.values[m][0].len();
+                vec![vec![Vec::with_capacity(trials); slots]; tuples]
+            })
+            .collect();
+        fn splitmix(mut x: u64) -> u64 {
+            x = x.wrapping_add(0x9E3779B97F4A7C15);
+            let mut z = x;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
+            z ^ (z >> 31)
+        }
+        let result = (|| -> Result<(), String> {
+            for trial in 0..trials {
+                for (k, (m, dist)) in dist_inputs.iter().enumerate() {
+                    let seed = ((k as u64 + 1) << 32) ^ (trial as u64 + 1);
+                    let u = (splitmix(seed) >> 11) as f64 / (1u64 << 53) as f64;
+                    let name = self.checked.measures[*m].name.clone();
+                    self.set_input(&name, None, None, dist.quantile(u))?;
+                }
+                self.recalc()?;
+                for m in 0..n_measures {
+                    if self.checked.measures[m].is_input {
+                        continue;
+                    }
+                    for mb in 0..self.checked.tuple_count(m) {
+                        for (slot, v) in self.values[m][mb].iter().enumerate() {
+                            acc[m][mb][slot].push(*v);
+                        }
+                    }
+                }
+            }
+            Ok(())
+        })();
+        self.values = saved_values;
+        self.dirty = saved_dirty;
+        result?;
+        let pct = |v: &mut Vec<f64>, p: f64| -> f64 {
+            v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            v[((v.len() - 1) as f64 * p).round() as usize]
+        };
+        let mut cells = Vec::new();
+        for m in 0..n_measures {
+            if self.checked.measures[m].is_input {
+                continue;
+            }
+            for mb in 0..self.checked.tuple_count(m) {
+                let label = self.checked.tuple_label(m, mb);
+                let display = if label.is_empty() {
+                    self.checked.measures[m].name.clone()
+                } else {
+                    format!("{}[{}]", self.checked.measures[m].name, label)
+                };
+                let bands: Vec<[f64; 3]> = acc[m][mb]
+                    .iter_mut()
+                    .map(|v| {
+                        if v.is_empty() || v.iter().any(|x| x.is_nan()) {
+                            [f64::NAN; 3]
+                        } else {
+                            [pct(v, 0.10), pct(v, 0.50), pct(v, 0.90)]
+                        }
+                    })
+                    .collect();
+                cells.push((display, self.checked.measures[m].is_series, bands));
+            }
+        }
+        Ok(SimResult { trials, cells })
     }
 
     /// Tornado sensitivity: perturb every literal-editable input site by

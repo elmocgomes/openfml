@@ -330,6 +330,46 @@ pub extern "C" fn fml_scenario() -> i32 {
     }
 }
 
+/// Monte Carlo simulation over the model's distribution inputs; returns
+/// per-cell [p10, p50, p90] bands.
+#[no_mangle]
+pub extern "C" fn fml_simulate(trials: i32) -> i32 {
+    let session = unsafe {
+        match SESSION.as_mut() {
+            Some(s) => s,
+            None => {
+                set_result("{\"ok\":false,\"error\":\"no model loaded\"}".into());
+                return 1;
+            }
+        }
+    };
+    match session.simulate(trials.max(10) as usize) {
+        Ok(sim) => {
+            let mut out = format!("{{\"ok\":true,\"trials\":{},\"cells\":[", sim.trials);
+            for (k, (name, is_series, bands)) in sim.cells.iter().enumerate() {
+                if k > 0 {
+                    out.push(',');
+                }
+                out.push_str(&format!("{{\"name\":\"{}\",\"series\":{},\"bands\":[", json_escape(name), is_series));
+                for (j, b) in bands.iter().enumerate() {
+                    if j > 0 {
+                        out.push(',');
+                    }
+                    out.push_str(&format!("[{},{},{}]", json_num(b[0]), json_num(b[1]), json_num(b[2])));
+                }
+                out.push_str("]}");
+            }
+            out.push_str("]}");
+            set_result(out);
+            0
+        }
+        Err(e) => {
+            set_result(format!("{{\"ok\":false,\"error\":\"{}\"}}", json_escape(&e)));
+            1
+        }
+    }
+}
+
 /// Tornado sensitivity for one output cell (name via input buffer, with
 /// optional "|member"); returns ranked {label, down, up} bars.
 #[no_mangle]

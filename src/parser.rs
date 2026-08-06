@@ -20,10 +20,10 @@ pub struct Parser {
 }
 
 const DIMLESS_ALIASES: [&str; 2] = ["rate", "ratio"];
-const KEYWORDS: [&str; 26] = [
+const KEYWORDS: [&str; 29] = [
     "model", "calendar", "currency", "unit", "input", "solve", "assert", "period",
     "over", "init", "tolerance", "max_iterations", "prev", "relax", "when", "match", "in",
-    "dimension", "functional", "at", "eliminate", "against", "scenario", "from", "actuals", "until",
+    "dimension", "functional", "at", "eliminate", "against", "scenario", "from", "actuals", "until", "metalog", "uniform", "normal",
 ];
 
 fn lit_kind(e: &Expr) -> Option<LitKind> {
@@ -467,6 +467,55 @@ impl Parser {
                 init = Some((label, e));
             }
         }
+        if self.eat_sym("~") {
+            if !is_input {
+                return Err(format!(
+                    "line {line}: '~' distributions are for inputs only"
+                ));
+            }
+            let kind = self.expect_ident()?;
+            let mut params = Vec::new();
+            match kind.as_str() {
+                "metalog" => {
+                    self.expect_sym("{")?;
+                    loop {
+                        let key = self.expect_ident()?;
+                        self.expect_sym(":")?;
+                        params.push((Some(key), self.expr()?));
+                        if !self.eat_sym(",") {
+                            break;
+                        }
+                    }
+                    self.expect_sym("}")?;
+                }
+                "uniform" | "normal" => {
+                    self.expect_sym("(")?;
+                    params.push((None, self.expr()?));
+                    self.expect_sym(",")?;
+                    params.push((None, self.expr()?));
+                    self.expect_sym(")")?;
+                }
+                other => {
+                    return Err(format!(
+                        "line {}: unknown distribution '{other}' (metalog | uniform | normal)",
+                        self.line()
+                    ))
+                }
+            }
+            self.site_buf.clear();
+            return Ok(MeasureDecl {
+                name,
+                is_input,
+                ann,
+                over,
+                init,
+                // Placeholder; the checker substitutes the median so the
+                // model stays deterministic until `simulate` is invoked.
+                body: Body::Expr(Expr::Num(f64::NAN)),
+                dist: Some(DistDecl { kind, params }),
+                line,
+            });
+        }
         self.expect_sym("=")?;
         self.site_buf.clear();
         let body = if matches!(self.peek(), Some(Tok::Sym("{"))) {
@@ -494,7 +543,7 @@ impl Parser {
         } else {
             self.site_buf.clear();
         }
-        Ok(MeasureDecl { name, is_input, ann, over, init, body, line })
+        Ok(MeasureDecl { name, is_input, ann, over, init, body, dist: None, line })
     }
 
     /// Input body: `match Dim { Member -> <map or expr> ... [else -> …] }`.

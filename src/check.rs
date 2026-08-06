@@ -32,6 +32,56 @@ pub struct DimInfo {
     pub currencies: Vec<Unit>,
 }
 
+/// A fitted distribution for a stochastic input. Deterministic evaluation
+/// uses the median (Q(0.5)); `simulate` samples via the quantile function
+/// (SIPmath posture: deterministic, portable, reproducible).
+#[derive(Clone, Debug, PartialEq)]
+pub enum Dist {
+    /// 3-term Keelin metalog fitted from p10/p50/p90.
+    Metalog { a1: f64, a2: f64, a3: f64 },
+    Uniform { a: f64, b: f64 },
+    Normal { mu: f64, sd: f64 },
+}
+
+impl Dist {
+    pub fn quantile(&self, u: f64) -> f64 {
+        let u = u.clamp(1e-9, 1.0 - 1e-9);
+        match self {
+            Dist::Metalog { a1, a2, a3 } => {
+                let l = (u / (1.0 - u)).ln();
+                a1 + a2 * l + a3 * (u - 0.5) * l
+            }
+            Dist::Uniform { a, b } => a + (b - a) * u,
+            Dist::Normal { mu, sd } => mu + sd * inv_norm(u),
+        }
+    }
+
+    pub fn median(&self) -> f64 {
+        self.quantile(0.5)
+    }
+}
+
+/// Acklam's rational approximation of the inverse normal CDF.
+fn inv_norm(p: f64) -> f64 {
+    const A: [f64; 6] = [-3.969683028665376e1, 2.209460984245205e2, -2.759285104469687e2, 1.383577518672690e2, -3.066479806614716e1, 2.506628277459239];
+    const B: [f64; 5] = [-5.447609879822406e1, 1.615858368580409e2, -1.556989798598866e2, 6.680131188771972e1, -1.328068155288572e1];
+    const C: [f64; 6] = [-7.784894002430293e-3, -3.223964580411365e-1, -2.400758277161838, -2.549732539343734, 4.374664141464968, 2.938163982698783];
+    const D: [f64; 4] = [7.784695709041462e-3, 3.224671290700398e-1, 2.445134137142996, 3.754408661907416];
+    let plow = 0.02425;
+    if p < plow {
+        let q = (-2.0 * p.ln()).sqrt();
+        (((((C[0] * q + C[1]) * q + C[2]) * q + C[3]) * q + C[4]) * q + C[5])
+            / ((((D[0] * q + D[1]) * q + D[2]) * q + D[3]) * q + 1.0)
+    } else if p <= 1.0 - plow {
+        let q = p - 0.5;
+        let r = q * q;
+        (((((A[0] * r + A[1]) * r + A[2]) * r + A[3]) * r + A[4]) * r + A[5]) * q
+            / (((((B[0] * r + B[1]) * r + B[2]) * r + B[3]) * r + B[4]) * r + 1.0)
+    } else {
+        -inv_norm(1.0 - p)
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct MeasureInfo {
     pub name: String,
@@ -44,6 +94,7 @@ pub struct MeasureInfo {
     pub range: (usize, usize),
     pub init: Option<Expr>,
     pub body: Body,
+    pub dist: Option<Dist>,
     pub solve: Option<usize>,
     pub line: usize,
 }
@@ -352,6 +403,7 @@ pub fn check(model: &Model) -> Result<Checked, String> {
                 range: (0, n - 1),
                 init: m.init.as_ref().map(|(_, e)| e.clone()),
                 body: m.body.clone(),
+                dist: None, // fitted below (needs the unit checker's helpers)
                 solve,
                 line: m.line,
             });
@@ -717,6 +769,74 @@ pub fn check(model: &Model) -> Result<Checked, String> {
     }
     for (i, u) in known.iter().enumerate() {
         measures[i].munit = u.clone().unwrap();
+    }
+
+    // ---- distributions -----------------------------------------------------
+    fn const_eval(e: &Expr) -> Result<f64, String> {
+        Ok(match e {
+            Expr::Num(v) | Expr::Qty(v, _) => *v,
+            Expr::Pct(v) => *v,
+            Expr::Neg(x) => -const_eval(x)?,
+            Expr::Bin(op, a, b) => {
+                let (x, y) = (const_eval(a)?, const_eval(b)?);
+                match op {
+                    BinOp::Add => x + y,
+                    BinOp::Sub => x - y,
+                    BinOp::Mul => x * y,
+                    BinOp::Div => x / y,
+                    BinOp::Pow => x.powf(y),
+                }
+            }
+            _ => return Err("distribution parameters must be constants".into()),
+        })
+    }
+    for (i, d) in decls.iter().enumerate() {
+        let Some(dd) = &d.dist else { continue };
+        let get_keyed = |k: &str| -> Result<f64, String> {
+            dd.params
+                .iter()
+                .find(|(key, _)| key.as_deref() == Some(k))
+                .map(|(_, e)| const_eval(e))
+                .transpose()?
+                .ok_or_else(|| format!("line {}: metalog needs '{k}'", d.line))
+        };
+        let dist = match dd.kind.as_str() {
+            "metalog" => {
+                let (q10, q50, q90) = (get_keyed("p10")?, get_keyed("p50")?, get_keyed("p90")?);
+                if !(q10 <= q50 && q50 <= q90) {
+                    return Err(format!(
+                        "line {}: metalog quantiles must satisfy p10 <= p50 <= p90",
+                        d.line
+                    ));
+                }
+                // 3-term closed-form fit (Keelin 2016).
+                let l9 = (0.9f64 / 0.1).ln();
+                Dist::Metalog {
+                    a1: q50,
+                    a2: (q90 - q10) / (2.0 * l9),
+                    a3: (q90 + q10 - 2.0 * q50) / (0.8 * l9),
+                }
+            }
+            "uniform" => {
+                let (a, b) = (const_eval(&dd.params[0].1)?, const_eval(&dd.params[1].1)?);
+                if b < a {
+                    return Err(format!("line {}: uniform(a, b) needs a <= b", d.line));
+                }
+                Dist::Uniform { a, b }
+            }
+            "normal" => {
+                let (mu, sd) = (const_eval(&dd.params[0].1)?, const_eval(&dd.params[1].1)?);
+                if sd < 0.0 {
+                    return Err(format!("line {}: normal(mean, sd) needs sd >= 0", d.line));
+                }
+                Dist::Normal { mu, sd }
+            }
+            _ => unreachable!("parser filters kinds"),
+        };
+        // Deterministic-by-default: the body becomes the median literal.
+        let median = dist.median();
+        measures[i].body = Body::Expr(Expr::Num(median));
+        measures[i].dist = Some(dist);
     }
 
     // ---- unit checking -----------------------------------------------------

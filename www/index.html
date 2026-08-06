@@ -63,6 +63,10 @@
   #tornado .up { background:var(--ok); left:50%; border-radius:0 5px 5px 0; }
   #tornado .close { float:right; cursor:pointer; opacity:.6; }
   td.torn { cursor: crosshair; }
+  #simBtn { font:inherit; padding:.15rem .55rem; margin-left:.3rem; border:1px solid var(--edge);
+    background:transparent; border-radius:10px; cursor:pointer; }
+  #simBtn.on { border-color:#8a2be2; color:#8a2be2; font-weight:600; }
+  td .band { display:block; font-size:.72em; opacity:.55; }
 </style>
 </head>
 <body>
@@ -70,6 +74,7 @@
   <h1>fml <span>workbench — text ⇄ grid, one live model</span></h1>
   <span class="models" id="models"></span>
   <span id="scen"></span>
+  <button id="simBtn" title="Monte Carlo over distribution inputs (500 trials)">simulate</button>
   <span id="file">
     <button id="saveBtn" title="Save .fml to disk (Ctrl/Cmd+S)">save</button>
     <span id="draftState"></span>
@@ -89,6 +94,7 @@ const MODELS = ["rolling", "budget", "finplan", "solar_pf", "fx_consol"];
 const enc = new TextEncoder(), dec = new TextDecoder();
 let exports, prev = {}, current = "finplan", loadedOk = false;
 let baseVals = {}, activeScen = "Base";
+let simBands = null;   // name -> bands (per-slot [p10,p50,p90]) when sim mode on
 // ---- client mode: ?server=http://localhost:5199&user=alice ----
 const PARAMS = new URLSearchParams(location.search);
 const SERVER = PARAMS.get("server");
@@ -213,6 +219,11 @@ function render(r) {
         const dir = differs ? (v > b ? "dup" : "ddown") : "";
         const tip = differs ? ` title="Base: ${fmt(b)}"` : "";
         html += `<td class="${dir}${inRange ? "" : " out"}"${tip}>${fmt(v)}</td>`;
+      } else if (simBands && simBands[s.name] && inRange && !s.input) {
+        const [b10, b50, b90] = simBands[s.name][t] || [null, null, null];
+        const band = (b10 !== null && Math.abs(b90 - b10) > 1e-9)
+          ? `<span class="band">${fmt(b10)} … ${fmt(b90)}</span>` : "";
+        html += `<td title="p10 ${fmt(b10)} · p50 ${fmt(b50)} · p90 ${fmt(b90)}">${fmt(b50)}${band}</td>`;
       } else {
         const changed = prev[s.name] && prev[s.name][t] !== v;
         const torn = !SERVER && !inScen && inRange && !s.input ? " torn" : "";
@@ -383,6 +394,26 @@ srcBox.addEventListener("input", () => {
   }, 350);
 });
 document.getElementById("saveBtn").addEventListener("click", saveToDisk);
+document.getElementById("simBtn").addEventListener("click", () => {
+  if (SERVER) { setErr("simulate runs in local mode"); return; }
+  const btn = document.getElementById("simBtn");
+  if (simBands) {                        // exit sim mode
+    simBands = null;
+    btn.classList.remove("on");
+    load(document.getElementById("src").value, "back to deterministic");
+    return;
+  }
+  const t0 = performance.now();
+  if (exports.fml_simulate(500) !== 0) { setErr(readResult().error); return; }
+  const r = readResult();
+  simBands = {};
+  for (const c of r.cells) if (c.series) simBands[c.name] = c.bands;
+  btn.classList.add("on");
+  document.getElementById("stats").innerHTML =
+    `<b>simulated n=${r.trials}</b> · ${(performance.now() - t0).toFixed(0)} ms · cells show p50 with p10…p90`;
+  // re-render current grid with bands (reuse last full state)
+  writeInput("Base"); exports.fml_scenario(); render(readResult());
+});
 window.addEventListener("keydown", e => {
   if ((e.metaKey || e.ctrlKey) && e.key === "s") {
     e.preventDefault();
