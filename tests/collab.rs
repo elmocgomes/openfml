@@ -1,6 +1,6 @@
 //! Collaboration primitives: subspace ACLs and the event-sourced log.
 
-use fml::server::{apply_event, replay, Acl, Event};
+use fml::server::{Process, apply_event, replay, Acl, Event};
 use fml::Session;
 
 const BUDGET: &str = include_str!("../models/budget.fml");
@@ -26,13 +26,13 @@ fn event_log_replay_reproduces_state() {
     let mut live = Session::new(BUDGET).unwrap();
     live.run_full().unwrap();
     let events = vec![
-        Event { seq: 1, user: "alice".into(), name: "expenses".into(), member: Some("Marketing".into()), period: Some(1), value: 480.0 },
-        Event { seq: 2, user: "bob".into(), name: "expenses".into(), member: Some("Operations".into()), period: Some(0), value: 330.0 },
-        Event { seq: 3, user: "cfo".into(), name: "budget_cap".into(), member: None, period: Some(1), value: 1_900.0 },
+        Event { seq: 1, user: "alice".into(), kind: "patch".into(), name: "expenses".into(), member: Some("Marketing".into()), period: Some(1), value: 480.0, text: None },
+        Event { seq: 2, user: "bob".into(), kind: "patch".into(), name: "expenses".into(), member: Some("Operations".into()), period: Some(0), value: 330.0, text: None },
+        Event { seq: 3, user: "cfo".into(), kind: "patch".into(), name: "budget_cap".into(), member: None, period: Some(1), value: 1_900.0, text: None },
     ];
     let mut log = String::new();
     for ev in &events {
-        apply_event(&mut live, ev).unwrap();
+        apply_event(&mut live, &mut Process::default(), ev).unwrap();
         log.push_str(&ev.to_line());
         log.push('\n');
     }

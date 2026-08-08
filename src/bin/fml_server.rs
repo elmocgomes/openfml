@@ -1,21 +1,39 @@
-//! fml-server — the collaboration gate (zero-dependency HTTP/1.1).
+//! fml-server — the budget-process server (zero-dependency HTTP/1.1).
 //!
-//!   fml-server <model.fml> <owners.cfg> <events.log> <port>
+//!   fml-server <config-dir> <port>
+//!   fml-server token <user> [secret-file]
 //!
-//! Endpoints (JSON):
-//!   GET  /state                → full evaluated state + asserts
-//!   GET  /model                → current source text (write-back applied)
-//!   GET  /log                  → the event log
-//!   POST /patch                → {"user","name","member"?,"period"?,"value"}
-//!                                 ACL-checked, applied, logged. 403 on deny.
+//! The config directory holds the whole deployment, declaratively:
+//!   users.cfg      user: department role     (admin | editor | viewer)
+//!   access.cfg     per model: readable departments + write grants
+//!   models/*.fml   the models (includes resolve inside models/)
+//!   logs/<model>.log   signed event logs (created on demand)
+//!   server.secret  HMAC secret (created on first run)
 //!
-//! State is event-sourced: on boot the model file is loaded and the log
-//! replayed; the log line is written only after a successful apply.
+//! Endpoints (all take token; GETs via ?token=…&model=…):
+//!   GET  /models     → models the caller may read, + their role/dept
+//!   GET  /state      /model   /grants   /process   /seq   (per model)
+//!   GET  /log        → the signed event log (admins only)
+//!   POST /patch      {token, model, name, member?, period?, value}
+//!   POST /formula    {token, model, name, body}      (admins only)
+//!   POST /submit     {token, model}                  (department submits)
+//!   POST /reopen     {token, model, dept}            (admins)
+//!   POST /lock       {token, model}                  (admins)
+//!
+//! Every write passes ONE gate: verify token → read access → process
+//! state → role → grants → apply → sign → append. Process transitions
+//! live in the same hash-chained log as the numbers — who submitted when
+//! is as tamper-evident as the values themselves.
 
-use fml::server::{apply_event, make_token, replay_signed, sign_line, verify_token, Acl, Event, GENESIS};
+use fml::server::{
+    apply_event, gate, make_token, replay_signed, sign_line, verify_token, Access, Action,
+    Directory, Event, Process, Role, User, GENESIS,
+};
 use fml::Session;
+use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::TcpListener;
+use std::path::{Path, PathBuf};
 
 fn json_escape(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n").replace('\r', "\\r").replace('\t', "\\t")
@@ -77,46 +95,53 @@ fn read_string(s: &str) -> Result<(String, &str), String> {
     Err("unterminated string".into())
 }
 
-fn state_json(session: &mut Session) -> String {
-    let c = &session.checked;
-    let mut out = String::from("{\"ok\":true,\"series\":[");
-    let mut first = true;
-    for (i, mi) in c.measures.iter().enumerate() {
-        for mb in 0..c.tuple_count(i) {
-            if !mi.is_series {
-                continue;
-            }
-            if !first {
-                out.push(',');
-            }
-            first = false;
-            let label = c.tuple_label(i, mb);
-            let display = if label.is_empty() { mi.name.clone() } else { format!("{}[{}]", mi.name, label) };
-            out.push_str(&format!("[\"{}\",[", json_escape(&display)));
-            for (t, v) in session.values[i][mb].iter().enumerate() {
-                if t > 0 {
-                    out.push(',');
+fn url_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'%' if i + 2 < bytes.len() => {
+                let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or("");
+                if let Ok(v) = u8::from_str_radix(hex, 16) {
+                    out.push(v);
+                    i += 3;
+                    continue;
                 }
-                if v.is_finite() {
-                    out.push_str(&format!("{v}"));
-                } else {
-                    out.push_str("null");
-                }
+                out.push(bytes[i]);
+                i += 1;
             }
-            out.push_str("]]");
+            b'+' => {
+                out.push(b' ');
+                i += 1;
+            }
+            b => {
+                out.push(b);
+                i += 1;
+            }
         }
     }
-    out.push_str("],\"asserts\":[");
-    if let Ok(asserts) = session.run_asserts() {
-        for (k, a) in asserts.iter().enumerate() {
-            if k > 0 {
-                out.push(',');
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn query_params(path: &str) -> HashMap<String, String> {
+    let mut out = HashMap::new();
+    if let Some((_, q)) = path.split_once('?') {
+        for pair in q.split('&') {
+            if let Some((k, v)) = pair.split_once('=') {
+                out.insert(k.to_string(), url_decode(v));
             }
-            out.push_str(&format!("[\"{}\",{}]", json_escape(&a.name), a.passed));
         }
     }
-    out.push_str("]}");
     out
+}
+
+struct ModelState {
+    session: Session,
+    process: Process,
+    next_seq: u64,
+    chain_tip: String,
+    log_path: PathBuf,
 }
 
 fn respond(stream: &mut std::net::TcpStream, code: u16, body: &str) {
@@ -135,57 +160,87 @@ fn respond(stream: &mut std::net::TcpStream, code: u16, body: &str) {
     );
 }
 
+fn err_json(msg: &str) -> String {
+    format!("{{\"ok\":false,\"error\":\"{}\"}}", json_escape(msg))
+}
+
+fn process_json(p: &Process) -> String {
+    let mut subs: Vec<&String> = p.submitted.iter().collect();
+    subs.sort();
+    format!(
+        "{{\"locked\":{},\"submitted\":[{}]}}",
+        p.locked,
+        subs.iter().map(|d| format!("\"{}\"", json_escape(d))).collect::<Vec<_>>().join(",")
+    )
+}
+
+fn role_str(r: Role) -> &'static str {
+    match r {
+        Role::Admin => "admin",
+        Role::Editor => "editor",
+        Role::Viewer => "viewer",
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    // `fml-server token <user> [secret-file]` — mint a bearer token.
     if args.len() >= 3 && args[1] == "token" {
         let path = args.get(3).map(String::as_str).unwrap_or("server.secret");
-        let secret = fml::crypto::load_or_create_secret(std::path::Path::new(path)).expect("secret");
+        let secret = fml::crypto::load_or_create_secret(Path::new(path)).expect("secret");
         println!("{}", make_token(&secret, &args[2]));
         return;
     }
-    if args.len() != 5 && args.len() != 6 {
-        eprintln!("usage: fml-server <model.fml> <owners.cfg> <events.log> <port> [secret-file]");
+    if args.len() != 3 {
+        eprintln!("usage: fml-server <config-dir> <port>");
         eprintln!("       fml-server token <user> [secret-file]");
         std::process::exit(2);
     }
-    let (model_path, acl_path, log_path, port) = (&args[1], &args[2], &args[3], &args[4]);
-    let secret_path = args.get(5).map(String::as_str).unwrap_or("server.secret");
-    let secret =
-        fml::crypto::load_or_create_secret(std::path::Path::new(secret_path)).expect("server secret");
+    let dir = PathBuf::from(&args[1]);
+    let port = &args[2];
+    let secret = fml::crypto::load_or_create_secret(&dir.join("server.secret")).expect("server secret");
+    let directory = Directory::parse(&std::fs::read_to_string(dir.join("users.cfg")).expect("read users.cfg"))
+        .expect("parse users.cfg");
+    let access = Access::parse(&std::fs::read_to_string(dir.join("access.cfg")).expect("read access.cfg"))
+        .expect("parse access.cfg");
+    std::fs::create_dir_all(dir.join("logs")).expect("logs dir");
 
-    let raw = std::fs::read_to_string(model_path).expect("read model");
-    let base = std::path::Path::new(model_path).parent().map(|p| p.to_path_buf()).unwrap_or_default();
-    let src = fml::expand_includes(&raw, &mut |rel| {
-        std::fs::read_to_string(base.join(rel)).map_err(|e| format!("include {rel}: {e}"))
-    })
-    .expect("expand includes");
-    let acl = Acl::parse(&std::fs::read_to_string(acl_path).expect("read owners")).expect("parse owners");
-
-    let mut session = Session::new(&src).expect("compile model");
-    session.run_full().expect("evaluate model");
-    let mut next_seq = 1u64;
-    let mut chain_tip = GENESIS.to_string();
-    if let Ok(log) = std::fs::read_to_string(log_path) {
-        // Verify-then-apply: a log that fails its hash chain has been
-        // modified after the fact — refuse to serve from it.
-        let (last, tip) = replay_signed(&mut session, &log, &secret).expect("replay signed event log");
-        next_seq = last + 1;
-        chain_tip = tip;
-        eprintln!("replayed {} events (chain verified)", last);
+    // Boot every model: expand includes inside models/, replay its signed
+    // log — values AND process state both come from the chain.
+    let mut states: HashMap<String, ModelState> = HashMap::new();
+    for ma in &access.models {
+        let mpath = dir.join("models").join(&ma.file);
+        let raw = std::fs::read_to_string(&mpath).unwrap_or_else(|e| panic!("read {}: {e}", mpath.display()));
+        let base = dir.join("models");
+        let exp = fml::expand_includes_with_map(&ma.file, &raw, &mut |rel| {
+            std::fs::read_to_string(base.join(rel)).map_err(|e| format!("include {rel}: {e}"))
+        })
+        .expect("expand includes");
+        let mut session = Session::new_expanded(exp).expect("compile model");
+        session.run_full().expect("evaluate model");
+        let mut process = Process::default();
+        let log_path = dir.join("logs").join(format!("{}.log", ma.file));
+        let (mut next_seq, mut chain_tip) = (1u64, GENESIS.to_string());
+        if let Ok(log) = std::fs::read_to_string(&log_path) {
+            let (last, tip) =
+                replay_signed(&mut session, &mut process, &log, &secret).expect("replay signed event log");
+            next_seq = last + 1;
+            chain_tip = tip;
+            eprintln!("{}: replayed {} events (chain verified)", ma.file, last);
+        }
+        states.insert(ma.file.clone(), ModelState { session, process, next_seq, chain_tip, log_path });
     }
 
     let listener = TcpListener::bind(format!("127.0.0.1:{port}")).expect("bind");
     eprintln!(
-        "fml-server on 127.0.0.1:{port} — model {model_path}, {} users, tokens via 'fml-server token <user>'",
-        acl.users.len()
+        "fml-server on 127.0.0.1:{port} — {} models, {} users, tokens via 'fml-server token <user>'",
+        states.len(),
+        directory.users.len()
     );
 
     for stream in listener.incoming() {
         let Ok(mut stream) = stream else { continue };
         let mut buf = Vec::new();
         let mut tmp = [0u8; 4096];
-        // Read headers (+ body via Content-Length).
         let mut header_end = 0;
         loop {
             let Ok(n) = stream.read(&mut tmp) else { break };
@@ -215,28 +270,101 @@ fn main() {
         let body = String::from_utf8_lossy(&buf[header_end..(header_end + clen).min(buf.len())]).to_string();
         let request_line = head.lines().next().unwrap_or_default().to_string();
         let mut parts = request_line.split_whitespace();
-        let (method, path) = (parts.next().unwrap_or(""), parts.next().unwrap_or(""));
+        let (method, full_path) = (parts.next().unwrap_or(""), parts.next().unwrap_or(""));
+        let path = full_path.split('?').next().unwrap_or("");
+        let q = query_params(full_path);
+        let fields = if method == "POST" { parse_flat_json(&body).unwrap_or_default() } else { Vec::new() };
+        let get = |k: &str| -> Option<String> {
+            fields
+                .iter()
+                .find(|(f, _)| f == k)
+                .map(|(_, v)| v.clone())
+                .or_else(|| q.get(k).cloned())
+        };
+
+        // Identity first: every endpoint requires a verified token.
+        let Some(user) = get("token").and_then(|t| verify_token(&secret, &t)).and_then(|n| directory.find(&n).cloned())
+        else {
+            respond(&mut stream, 401, &err_json("missing or invalid token (or unknown user)"));
+            continue;
+        };
+
+        if method == "GET" && path == "/models" {
+            let mut out = format!(
+                "{{\"ok\":true,\"me\":{{\"user\":\"{}\",\"dept\":\"{}\",\"role\":\"{}\"}},\"models\":[",
+                json_escape(&user.name),
+                json_escape(&user.dept),
+                role_str(user.role)
+            );
+            let mut first = true;
+            for ma in &access.models {
+                if !ma.can_read(&user) {
+                    continue;
+                }
+                let st = &states[&ma.file];
+                if !first {
+                    out.push(',');
+                }
+                first = false;
+                out.push_str(&format!(
+                    "{{\"model\":\"{}\",\"process\":{}}}",
+                    json_escape(&ma.file),
+                    process_json(&st.process)
+                ));
+            }
+            out.push_str("]}");
+            respond(&mut stream, 200, &out);
+            continue;
+        }
+
+        // Everything else is per-model: resolve + read-access check.
+        let Some(model) = get("model") else {
+            respond(&mut stream, 400, &err_json("missing model"));
+            continue;
+        };
+        let Some(ma) = access.model(&model) else {
+            respond(&mut stream, 404, &err_json("unknown model"));
+            continue;
+        };
+        if !ma.can_read(&user) {
+            respond(
+                &mut stream,
+                403,
+                &err_json(&format!("{} ({}) may not access {}", user.name, user.dept, model)),
+            );
+            continue;
+        }
+        let st = states.get_mut(&model).expect("state exists for access-listed model");
 
         match (method, path) {
             ("GET", "/state") => {
                 let stats = format!(
-                    "\"seq\":{},\"steps_run\":0,\"steps_total\":0,\"nodes_changed\":0,",
-                    next_seq - 1
+                    "\"seq\":{},\"process\":{},\"steps_run\":0,\"steps_total\":0,\"nodes_changed\":0,",
+                    st.next_seq - 1,
+                    process_json(&st.process)
                 );
-                let json = fml::wasm::dump_state(&mut session, &stats, false);
+                let json = fml::wasm::dump_state(&mut st.session, &stats, false);
                 respond(&mut stream, 200, &json);
             }
             ("GET", "/seq") => {
-                respond(&mut stream, 200, &format!("{{\"ok\":true,\"seq\":{}}}", next_seq - 1));
+                respond(
+                    &mut stream,
+                    200,
+                    &format!("{{\"ok\":true,\"seq\":{},\"process\":{}}}", st.next_seq - 1, process_json(&st.process)),
+                );
+            }
+            ("GET", "/process") => {
+                respond(&mut stream, 200, &format!("{{\"ok\":true,\"process\":{}}}", process_json(&st.process)));
             }
             ("GET", "/grants") => {
+                // Effective per-user grants (directory × access × role).
                 let mut out = String::from("{\"ok\":true,\"users\":[");
-                for (k, (user, grants)) in acl.users.iter().enumerate() {
+                for (k, u) in directory.users.iter().enumerate() {
                     if k > 0 {
                         out.push(',');
                     }
-                    out.push_str(&format!("{{\"user\":\"{}\",\"grants\":[", json_escape(user)));
-                    for (j, g) in grants.iter().enumerate() {
+                    out.push_str(&format!("{{\"user\":\"{}\",\"grants\":[", json_escape(&u.name)));
+                    for (j, g) in ma.effective_grants(u).iter().enumerate() {
                         if j > 0 {
                             out.push(',');
                         }
@@ -254,86 +382,132 @@ fn main() {
                 out.push_str("]}");
                 respond(&mut stream, 200, &out);
             }
-            ("GET", "/legacy_state") => {
-                let json = state_json(&mut session);
-                respond(&mut stream, 200, &json);
-            }
             ("GET", "/model") => {
                 respond(
                     &mut stream,
                     200,
-                    &format!("{{\"ok\":true,\"src\":\"{}\"}}", json_escape(session.source())),
+                    &format!("{{\"ok\":true,\"src\":\"{}\"}}", json_escape(st.session.source())),
                 );
             }
             ("GET", "/log") => {
-                let log = std::fs::read_to_string(log_path).unwrap_or_default();
+                if user.role != Role::Admin {
+                    respond(&mut stream, 403, &err_json("the audit log is admin-only"));
+                    continue;
+                }
+                let log = std::fs::read_to_string(&st.log_path).unwrap_or_default();
                 respond(&mut stream, 200, &format!("{{\"ok\":true,\"log\":\"{}\"}}", json_escape(&log)));
             }
-            ("POST", "/patch") => {
-                let fields = match parse_flat_json(&body) {
-                    Ok(f) => f,
+            ("POST", "/patch") | ("POST", "/formula") | ("POST", "/submit") | ("POST", "/reopen")
+            | ("POST", "/lock") => {
+                let ev = match build_event(path, &user, st, &get) {
+                    Ok(ev) => ev,
                     Err(e) => {
-                        respond(&mut stream, 400, &format!("{{\"ok\":false,\"error\":\"{}\"}}", json_escape(&e)));
+                        respond(&mut stream, 400, &err_json(&e));
                         continue;
                     }
                 };
-                let get = |k: &str| fields.iter().find(|(f, _)| f == k).map(|(_, v)| v.clone());
-                // Identity comes ONLY from a verified token — a claimed
-                // "user" field is ignored.
-                let Some(token) = get("token") else {
-                    respond(&mut stream, 401, "{\"ok\":false,\"error\":\"missing token — get one with 'fml-server token <user>'\"}");
-                    continue;
+                let action = match action_of(&ev) {
+                    Ok(a) => a,
+                    Err(e) => {
+                        respond(&mut stream, 400, &err_json(&e));
+                        continue;
+                    }
                 };
-                let Some(user) = verify_token(&secret, &token) else {
-                    respond(&mut stream, 401, "{\"ok\":false,\"error\":\"invalid token\"}");
-                    continue;
-                };
-                let (Some(name), Some(value)) = (get("name"), get("value")) else {
-                    respond(&mut stream, 400, "{\"ok\":false,\"error\":\"need name, value\"}");
-                    continue;
-                };
-                let member = get("member").filter(|m| m != "null" && !m.is_empty());
-                let period: Option<usize> = get("period").and_then(|p| p.parse().ok());
-                let Ok(value) = value.parse::<f64>() else {
-                    respond(&mut stream, 400, "{\"ok\":false,\"error\":\"value must be a number\"}");
-                    continue;
-                };
-                // THE gate: authorize, apply, log — in that order.
-                if !acl.authorize(&user, &name, member.as_deref()) {
-                    respond(
-                        &mut stream,
-                        403,
-                        &format!(
-                            "{{\"ok\":false,\"error\":\"{} may not write {}{}\"}}",
-                            json_escape(&user),
-                            json_escape(&name),
-                            member.as_deref().map(|m| format!("[{m}]")).unwrap_or_default()
-                        ),
-                    );
+                // THE gate, then apply, then sign, then append.
+                if let Err(e) = gate(&user, ma, &st.process, &action) {
+                    respond(&mut stream, 403, &err_json(&e));
                     continue;
                 }
-                let ev = Event { seq: next_seq, user: user.clone(), name, member, period, value };
-                match apply_event(&mut session, &ev) {
+                match apply_event(&mut st.session, &mut st.process, &ev) {
                     Ok(()) => {
-                        use std::io::Write as _;
                         let line = ev.to_line();
-                        let sig = sign_line(&secret, &chain_tip, &line);
+                        let sig = sign_line(&secret, &st.chain_tip, &line);
                         let mut f = std::fs::OpenOptions::new()
                             .create(true)
                             .append(true)
-                            .open(log_path)
+                            .open(&st.log_path)
                             .expect("open log");
                         writeln!(f, "{line}\t{sig}").expect("append log");
-                        chain_tip = sig;
-                        next_seq += 1;
-                        respond(&mut stream, 200, &format!("{{\"ok\":true,\"seq\":{}}}", ev.seq));
+                        st.chain_tip = sig;
+                        st.next_seq += 1;
+                        respond(
+                            &mut stream,
+                            200,
+                            &format!("{{\"ok\":true,\"seq\":{},\"process\":{}}}", ev.seq, process_json(&st.process)),
+                        );
                     }
-                    Err(e) => {
-                        respond(&mut stream, 400, &format!("{{\"ok\":false,\"error\":\"{}\"}}", json_escape(&e)));
-                    }
+                    Err(e) => respond(&mut stream, 400, &err_json(&e)),
                 }
             }
-            _ => respond(&mut stream, 404, "{\"ok\":false,\"error\":\"not found\"}"),
+            _ => respond(&mut stream, 404, &err_json("not found")),
         }
     }
+}
+
+fn build_event(
+    path: &str,
+    user: &User,
+    st: &ModelState,
+    get: &dyn Fn(&str) -> Option<String>,
+) -> Result<Event, String> {
+    let seq = st.next_seq;
+    match path {
+        "/patch" => {
+            let name = get("name").ok_or("need name")?;
+            let value: f64 = get("value").ok_or("need value")?.parse().map_err(|_| "value must be a number")?;
+            let member = get("member").filter(|m| m != "null" && !m.is_empty());
+            let period: Option<usize> = get("period").and_then(|p| p.parse().ok());
+            Ok(Event { seq, user: user.name.clone(), kind: "patch".into(), name, member, period, value, text: None })
+        }
+        "/formula" => {
+            let name = get("name").ok_or("need name")?;
+            let body = get("body").ok_or("need body")?;
+            Ok(Event {
+                seq,
+                user: user.name.clone(),
+                kind: "formula".into(),
+                name,
+                member: None,
+                period: None,
+                value: 0.0,
+                text: Some(body),
+            })
+        }
+        "/submit" => Ok(Event {
+            seq,
+            user: user.name.clone(),
+            kind: "submit".into(),
+            name: user.dept.clone(),
+            member: None,
+            period: None,
+            value: 0.0,
+            text: None,
+        }),
+        "/reopen" => {
+            let dept = get("dept").ok_or("need dept")?;
+            Ok(Event { seq, user: user.name.clone(), kind: "reopen".into(), name: dept, member: None, period: None, value: 0.0, text: None })
+        }
+        "/lock" => Ok(Event {
+            seq,
+            user: user.name.clone(),
+            kind: "lock".into(),
+            name: "-".into(),
+            member: None,
+            period: None,
+            value: 0.0,
+            text: None,
+        }),
+        _ => Err("unknown action".into()),
+    }
+}
+
+fn action_of(ev: &Event) -> Result<Action<'_>, String> {
+    Ok(match ev.kind.as_str() {
+        "patch" => Action::Patch { measure: &ev.name, member: ev.member.as_deref() },
+        "formula" => Action::Formula,
+        "submit" => Action::Submit,
+        "reopen" => Action::Reopen { dept: &ev.name },
+        "lock" => Action::Lock,
+        other => return Err(format!("unknown kind '{other}'")),
+    })
 }

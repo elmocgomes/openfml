@@ -3,7 +3,7 @@
 //! makes modified history fail replay.
 
 use fml::crypto::{hex, hmac_sha256, sha256};
-use fml::server::{make_token, replay_signed, sign_line, verify_token, Acl, Event, GENESIS};
+use fml::server::{make_token, replay_signed, sign_line, verify_token, Acl, Event, Process, GENESIS};
 use fml::Session;
 
 #[test]
@@ -72,9 +72,9 @@ fn signed_log(secret: &[u8], events: &[Event]) -> String {
 
 fn events() -> Vec<Event> {
     vec![
-        Event { seq: 1, user: "alice".into(), name: "a".into(), member: None, period: Some(0), value: 11.0 },
-        Event { seq: 2, user: "bob".into(), name: "b".into(), member: None, period: None, value: 25.0 },
-        Event { seq: 3, user: "alice".into(), name: "a".into(), member: None, period: Some(1), value: 12.0 },
+        Event { seq: 1, user: "alice".into(), kind: "patch".into(), name: "a".into(), member: None, period: Some(0), value: 11.0, text: None },
+        Event { seq: 2, user: "bob".into(), kind: "patch".into(), name: "b".into(), member: None, period: None, value: 25.0, text: None },
+        Event { seq: 3, user: "alice".into(), kind: "patch".into(), name: "a".into(), member: None, period: Some(1), value: 12.0, text: None },
     ]
 }
 
@@ -84,7 +84,7 @@ fn intact_chains_replay_and_verify() {
     let log = signed_log(secret, &events());
     let mut s = Session::new(MODEL).unwrap();
     s.run_full().unwrap();
-    let (last, tip) = replay_signed(&mut s, &log, secret).unwrap();
+    let (last, tip) = replay_signed(&mut s, &mut Process::default(), &log, secret).unwrap();
     assert_eq!(last, 3);
     assert_eq!(tip.len(), 64, "tip is the last signature");
     // `a` is a broadcast literal: each patch rewrites the ONE literal, so
@@ -102,7 +102,7 @@ fn edited_history_breaks_the_chain() {
     assert_ne!(tampered, log);
     let mut s = Session::new(MODEL).unwrap();
     s.run_full().unwrap();
-    let err = replay_signed(&mut s, &tampered, secret).unwrap_err();
+    let err = replay_signed(&mut s, &mut Process::default(), &tampered, secret).unwrap_err();
     assert!(err.contains("signature mismatch"), "err: {err}");
     assert!(err.contains("event 2"), "names the modified event: {err}");
 }
@@ -115,12 +115,12 @@ fn deleted_and_reordered_history_break_the_chain() {
     let deleted = format!("{}\n{}\n", lines[0], lines[2]);
     let mut s = Session::new(MODEL).unwrap();
     s.run_full().unwrap();
-    assert!(replay_signed(&mut s, &deleted, secret).unwrap_err().contains("signature mismatch"));
+    assert!(replay_signed(&mut s, &mut Process::default(), &deleted, secret).unwrap_err().contains("signature mismatch"));
     // Reordering breaks immediately.
     let reordered = format!("{}\n{}\n{}\n", lines[1], lines[0], lines[2]);
     let mut s2 = Session::new(MODEL).unwrap();
     s2.run_full().unwrap();
-    assert!(replay_signed(&mut s2, &reordered, secret).unwrap_err().contains("signature mismatch"));
+    assert!(replay_signed(&mut s2, &mut Process::default(), &reordered, secret).unwrap_err().contains("signature mismatch"));
 }
 
 #[test]
@@ -129,12 +129,12 @@ fn wrong_secret_and_legacy_logs_are_refused() {
     let log = signed_log(secret, &events());
     let mut s = Session::new(MODEL).unwrap();
     s.run_full().unwrap();
-    assert!(replay_signed(&mut s, &log, b"other").unwrap_err().contains("signature mismatch"));
+    assert!(replay_signed(&mut s, &mut Process::default(), &log, b"other").unwrap_err().contains("signature mismatch"));
     // A pre-authentication (unsigned) log is refused with guidance.
     let legacy = events().iter().map(|e| e.to_line() + "\n").collect::<String>();
     let mut s2 = Session::new(MODEL).unwrap();
     s2.run_full().unwrap();
-    assert!(replay_signed(&mut s2, &legacy, secret).unwrap_err().contains("unsigned"));
+    assert!(replay_signed(&mut s2, &mut Process::default(), &legacy, secret).unwrap_err().contains("unsigned"));
 }
 
 #[test]

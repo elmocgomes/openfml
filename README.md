@@ -513,6 +513,26 @@ The scheduler generalizes to the (measure × member × period) micro-graph.
   view ("viewing scenario Squeeze — cells colored vs Base") with a
   one-click return; the window title names the model; a quiet footer
   hint teaches the click affordances; Escape closes any panel.
+- **The budget process (slice 12)** — the server grew from a demo gate
+  into a governed budget round. A config directory declares everything:
+  `users.cfg` (user: **department role** — admin | editor | viewer),
+  `access.cfg` (per model: which departments may READ it at all —
+  department-restricted fmls — and which measures each department's
+  editors may write), `models/` and per-model signed logs. Roles are
+  structural, not advisory: **editors can only alter inputs** because
+  /patch reaches only literal input sites by construction; formulas are
+  a separate admin-only endpoint; viewers hold no write path at all.
+  The round itself — **submit** (freezes the department's editors),
+  **reopen**, **lock** (final) — flows through the SAME hash-chained
+  log as the numbers, so *who submitted when* is tamper-evident audit
+  history and a restart replays values, formula changes, and process
+  state together ("replayed 7 events, chain verified" → locked, with
+  the admin's formula edit persisted in the source). One gate: verify
+  token → model read access → process state → role → grants → apply →
+  sign → append (`tests/process.rs`). The workbench client mode shows a
+  **process banner** (dept · role · round status), a model picker of
+  what YOU may read, a submit button for editors, reopen/lock controls
+  for admins — and cells freeze the moment your department submits.
 - Still ahead — per-declaration unit-inference/scheduling queries, LSP
   rename riding the existing machinery. Elsewhere: integer minor-unit
   representation, read-side information-flow control, TLS /

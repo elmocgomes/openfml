@@ -31,6 +31,13 @@
   @keyframes throb { 50% { background: rgba(221,51,51,.3); } }
   #scenBanner { padding:.3rem 1rem; background: rgba(184,134,11,.12); color:#b8860b;
     border-bottom:1px solid var(--edge); font-weight:600; display:flex; gap:1rem; align-items:center; }
+  #procBanner { padding:.3rem 1rem; background: rgba(42,125,209,.08);
+    border-bottom:1px solid var(--edge); display:flex; gap:.8rem; align-items:center; flex-wrap:wrap; }
+  #procBanner.locked { background: rgba(221,51,51,.1); }
+  #procBanner .tag { border:1px solid var(--edge); border-radius:10px; padding:.05rem .5rem; font-size:.85em; }
+  #procBanner .tag.sub { border-color:#b8860b; color:#b8860b; }
+  #procBanner button { font:inherit; font-size:.85em; border:1px solid var(--edge); background:transparent;
+    border-radius:6px; padding:.1rem .55rem; cursor:pointer; }
   #scenBanner button { font:inherit; font-size:.85em; border:1px solid currentColor; color:inherit;
     background:transparent; border-radius:5px; padding:.05rem .5rem; cursor:pointer; }
   #split { cursor: col-resize; background: transparent; position:relative; }
@@ -174,6 +181,7 @@
   <span id="asserts" title="Model checks — every assert, every period"></span>
 </header>
 <div id="scenBanner" style="display:none"></div>
+<div id="procBanner" style="display:none"></div>
 <main>
   <div id="left">
     <div id="ftabs" style="display:none"></div>
@@ -383,7 +391,8 @@ function render(r) {
     s.vals.forEach((v, t) => {
       const inRange = t >= s.range[0] && t <= s.range[1];
       let editable = !inScen && (s.edit === "all" ? inRange : Array.isArray(s.edit) && s.edit.includes(t));
-      if (SERVER) editable = editable && authorized(s.key, s.member || null);
+      if (SERVER) editable = editable && authorized(s.key, s.member || null)
+        && (!window.clientCanEdit || window.clientCanEdit());
       if (editable) {
         html += `<td><input data-key="${s.key}" data-member="${s.member || ""}" data-t="${t}" value="${v === null ? "" : v}"></td>`;
       } else if (inScen) {
@@ -435,7 +444,8 @@ function render(r) {
       if (SERVER) {
         const t0 = performance.now();
         fetch(SERVER + "/patch", { method: "POST", body: JSON.stringify({
-          token: TOKEN, name: inp.dataset.key, member: inp.dataset.member || "",
+          token: TOKEN, model: document.getElementById("modelSel").value,
+          name: inp.dataset.key, member: inp.dataset.member || "",
           period: inp.dataset.t, value: String(v) }) })
           .then(r => r.json())
           .then(async r => {
@@ -639,28 +649,100 @@ async function loadModel(what) {
 
 let lastSeq = -1;
 async function refreshFromServer(us, what) {
-  const r = await (await fetch(SERVER + "/state")).json();
+  const r = await (await fetch(SERVER + "/state" + window.clientQs())).json();
   lastSeq = r.seq;
+  if (window.refreshProcFromState) window.refreshProcFromState(r);
   stats(r, us || 0, what || "server state");
   render(r);
-  const m = await (await fetch(SERVER + "/model")).json();
+  const m = await (await fetch(SERVER + "/model" + window.clientQs())).json();
   const box = document.getElementById("src");
   if (m.src !== box.value) { const top = box.scrollTop; box.value = m.src; box.scrollTop = top; if (typeof renderHl === "function") renderHl(); }
 }
 if (SERVER) {
-  // ---- connected client: server evaluates, we project ----
-  document.querySelector("header h1 span").textContent =
-    `— connected to ${SERVER} as ${USER}`;
-  document.getElementById("modelSel").style.display = "none";
+  // ---- connected client: the budget process, server-evaluated ----
+  document.title = `fml · ${USER}`;
   document.querySelector("header .actions").style.display = "none";
-  const box = document.getElementById("src");
-  box.readOnly = true;
-  const g = await (await fetch(SERVER + "/grants")).json();
-  myGrants = (g.users.find(u => u.user === USER) || { grants: [] }).grants;
-  await refreshFromServer(0, "connected");
+  document.getElementById("views").style.display = "none";
+  document.getElementById("src").readOnly = true;
+  let ME = { user: USER, dept: "?", role: "viewer" };
+  let clientModel = PARAMS.get("model") || null;
+  let proc = { locked: false, submitted: [] };
+  const qs = () => `?token=${encodeURIComponent(TOKEN)}&model=${encodeURIComponent(clientModel)}`;
+  const post = (ep, extra) =>
+    fetch(SERVER + ep, { method: "POST", body: JSON.stringify(Object.assign({ token: TOKEN, model: clientModel }, extra || {})) })
+      .then(r => r.json());
+  window.clientCanEdit = () =>
+    !proc.locked && ME.role !== "viewer" && (ME.role === "admin" || !proc.submitted.includes(ME.dept));
+  function renderProc() {
+    const b = document.getElementById("procBanner");
+    b.style.display = "flex";
+    b.classList.toggle("locked", proc.locked);
+    let html = `<b>${ME.user}</b> <span class="tag">${ME.dept} · ${ME.role}</span>`;
+    if (proc.locked) {
+      html += ` <b>BUDGET LOCKED</b>`;
+    } else if (proc.submitted.includes(ME.dept) && ME.role !== "admin") {
+      html += ` <span class="tag sub">${ME.dept} submitted — waiting for finance</span>`;
+    } else {
+      html += ` round open`;
+    }
+    for (const d of proc.submitted) {
+      if (d !== ME.dept || ME.role === "admin") html += ` <span class="tag sub">${d} ✓ submitted</span>`;
+    }
+    if (!proc.locked && ME.role !== "viewer" && !proc.submitted.includes(ME.dept)) {
+      html += ` <button id="pSubmit">submit ${ME.dept}'s numbers</button>`;
+    }
+    if (ME.role === "admin") {
+      for (const d of proc.submitted) html += ` <button class="pReopen" data-d="${d}">reopen ${d}</button>`;
+      if (!proc.locked) html += ` <button id="pLock">lock the budget</button>`;
+      else html += ` <button class="pReopen" data-d="">unlock</button>`;
+    }
+    b.innerHTML = html;
+    b.querySelector("#pSubmit")?.addEventListener("click", async () => {
+      const r = await post("/submit");
+      if (!r.ok) { setErr(r.error); return; }
+      await refreshFromServer(0, `${ME.dept} submitted`);
+    });
+    b.querySelectorAll(".pReopen").forEach(btn => btn.addEventListener("click", async () => {
+      const r = await post("/reopen", { dept: btn.dataset.d || ME.dept });
+      if (!r.ok) { setErr(r.error); return; }
+      await refreshFromServer(0, "reopened");
+    }));
+    b.querySelector("#pLock")?.addEventListener("click", async () => {
+      const r = await post("/lock");
+      if (!r.ok) { setErr(r.error); return; }
+      await refreshFromServer(0, "budget locked");
+    });
+  }
+  window.refreshProcFromState = r => {
+    if (r.process) { proc = r.process; renderProc(); }
+  };
+  const mi = await (await fetch(SERVER + "/models?token=" + encodeURIComponent(TOKEN))).json();
+  if (!mi.ok) { setErr(mi.error || "cannot reach server"); throw new Error("boot failed"); }
+  ME = mi.me;
+  const msel0 = document.getElementById("modelSel");
+  msel0.innerHTML = "";
+  for (const m of mi.models) {
+    const o = document.createElement("option");
+    o.value = o.textContent = m.model;
+    msel0.appendChild(o);
+  }
+  clientModel = clientModel || (mi.models[0] && mi.models[0].model);
+  if (clientModel) msel0.value = clientModel;
+  msel0.addEventListener("change", async () => {
+    clientModel = msel0.value;
+    await loadGrantsAndState();
+  });
+  async function loadGrantsAndState() {
+    const g = await (await fetch(SERVER + "/grants" + qs())).json();
+    myGrants = g.ok ? (g.users.find(u => u.user === USER) || { grants: [] }).grants : [];
+    await refreshFromServer(0, "connected · " + clientModel);
+  }
+  window.clientQs = qs;
+  await loadGrantsAndState();
   setInterval(async () => {
     try {
-      const s = await (await fetch(SERVER + "/seq")).json();
+      const s = await (await fetch(SERVER + "/seq" + qs())).json();
+      if (s.process) { proc = s.process; renderProc(); }
       if (s.seq !== lastSeq) await refreshFromServer(0, "peer commit #" + s.seq);
     } catch (e) { /* server away; keep last state */ }
   }, 1500);
