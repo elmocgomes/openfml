@@ -483,9 +483,24 @@ The scheduler generalizes to the (measure × member × period) micro-graph.
   fix (diagnostics clear) → shutdown (`tests/lsp.rs`). Wire it to any
   editor as a generic LSP for `.fml`: command `fml-lsp`, stdio
   transport, no arguments.
-- Still ahead — per-declaration unit-inference/scheduling queries (the
-  LSP's next speed-up at scale), LSP rename/completion riding the
-  existing rename machinery. Elsewhere: integer minor-unit
+- **The IDE editor (slice 10)** — the workbench's source pane grew up:
+  a zero-dependency code editor built as a highlight overlay (a
+  mirrored `<pre>` behind a transparent-text textarea, scroll-synced,
+  with a line-number gutter). Colors come from the REAL lexer via
+  `fml_tokens`, with **semantic classes** the session provides:
+  keywords purple, measures blue, dimension members teal, units green,
+  numbers amber, comments italic — a name is colored by what it IS in
+  this model, not by regex guesswork. **Error lines** highlight in red
+  from the resilient parser's exact locations, routed through the
+  source map to the active file, clearing the moment the model
+  compiles. **Completion** pops as you type (or Ctrl+Space): measures
+  with their units, members with their dimension, units, ranges,
+  keywords — from the live session via `fml_complete` — with
+  arrow/Tab/Enter/Escape keys and caret-anchored positioning. The same
+  candidates now serve `textDocument/completion` in fml-lsp, covered by
+  the protocol test.
+- Still ahead — per-declaration unit-inference/scheduling queries, LSP
+  rename riding the existing machinery. Elsewhere: integer minor-unit
   representation, read-side information-flow control, TLS /
   reverse-proxy deployment.
 

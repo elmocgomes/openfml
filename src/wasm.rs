@@ -320,7 +320,7 @@ pub extern "C" fn fml_load() -> i32 {
             // Salvage: drop broken declarations and their dependents; if
             // the remainder checks and runs, serve THAT with a warning —
             // the grid stays live while the file is mid-edit.
-            let attempt = (|| -> Result<(Session, String), String> {
+            let attempt = (|| -> Result<(Session, String, String), String> {
                 let sal = crate::parse_salvage(&expanded.flat)?;
                 if sal.errors.is_empty() && sal.dropped.is_empty() {
                     return Err(String::new()); // nothing to salvage around
@@ -343,10 +343,24 @@ pub extern "C" fn fml_load() -> i32 {
                         sal.dropped.iter().map(|(w, _)| w.clone()).collect();
                     warn.push_str(&format!("   (also omitted: {})", names.join(", ")));
                 }
-                Ok((s, warn))
+                // Structured error locations, routed to the owning file.
+                let mut errs = String::from("[");
+                for (i, e) in sal.errors.iter().enumerate() {
+                    if i > 0 {
+                        errs.push(',');
+                    }
+                    let (file, line) = s.locate_line(e.line);
+                    errs.push_str(&format!(
+                        "{{\"file\":\"{}\",\"line\":{line},\"msg\":\"{}\"}}",
+                        json_escape(&file),
+                        json_escape(&e.msg)
+                    ));
+                }
+                errs.push(']');
+                Ok((s, warn, errs))
             })();
             match attempt {
-                Ok((mut s, warn)) => {
+                Ok((mut s, warn, errs)) => {
                     unsafe {
                         ACTIVE_SCENARIO = None;
                     }
@@ -356,7 +370,10 @@ pub extern "C" fn fml_load() -> i32 {
                         false,
                     );
                     json.pop();
-                    json.push_str(&format!(",\"warning\":\"{}\"}}", json_escape(&warn)));
+                    json.push_str(&format!(
+                        ",\"warning\":\"{}\",\"errors\":{errs}}}",
+                        json_escape(&warn)
+                    ));
                     unsafe {
                         SESSION = Some(s);
                     }
@@ -364,7 +381,17 @@ pub extern "C" fn fml_load() -> i32 {
                     0
                 }
                 Err(_) => {
-                    set_result(format!("{{\"ok\":false,\"error\":\"{}\"}}", json_escape(&first_err)));
+                    // Hard failure: surface the line from the message.
+                    let line: usize = first_err
+                        .strip_prefix("line ")
+                        .and_then(|r| r.split(':').next())
+                        .and_then(|n| n.parse().ok())
+                        .unwrap_or(0);
+                    set_result(format!(
+                        "{{\"ok\":false,\"error\":\"{}\",\"errors\":[{{\"file\":\"\",\"line\":{line},\"msg\":\"{}\"}}]}}",
+                        json_escape(&first_err),
+                        json_escape(&first_err)
+                    ));
                     1
                 }
             }
@@ -824,6 +851,91 @@ pub extern "C" fn fml_rename() -> i32 {
             1
         }
     }
+}
+
+/// Tokenize the input buffer for editor highlighting: JSON [[kind, start,
+/// end], …] with SEMANTIC kinds when a session is loaded (measure/member/
+/// unit/keyword vs plain ident). Returns 1 on unlexable text (host falls
+/// back to plain rendering).
+#[no_mangle]
+pub extern "C" fn fml_tokens() -> i32 {
+    use crate::lexer::Tok;
+    let src = unsafe { String::from_utf8_lossy(&INPUT_BUF).to_string() };
+    let toks = match crate::lexer::lex_full(&src) {
+        Ok(t) => t,
+        Err(_) => {
+            set_result("{\"ok\":false}".into());
+            return 1;
+        }
+    };
+    let session = unsafe { SESSION.as_ref() };
+    let mut out = String::from("{\"ok\":true,\"toks\":[");
+    for (i, t) in toks.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        let kind = match &t.tok {
+            Tok::Ws => "ws",
+            Tok::Comment => "cm",
+            Tok::Directive => "dir",
+            Tok::Num(_) => "num",
+            Tok::Pct(_) => "pct",
+            Tok::Sym(_) => "sym",
+            Tok::Ident(name) => {
+                if crate::parser::is_keyword(name) {
+                    "kw"
+                } else if let Some(s) = session {
+                    if s.checked.index.contains_key(name) {
+                        "ms"
+                    } else if s.checked.member_lookup.contains_key(name)
+                        || s.checked.group_lookup.contains_key(name)
+                        || s.checked.dims.iter().any(|d| &d.name == name)
+                    {
+                        "mb"
+                    } else if s.checked.unit_reg.contains_key(name) {
+                        "un"
+                    } else {
+                        "id"
+                    }
+                } else {
+                    "id"
+                }
+            }
+        };
+        out.push_str(&format!("[\"{kind}\",{},{}]", t.start, t.end));
+    }
+    out.push_str("]}");
+    set_result(out);
+    0
+}
+
+/// Completion candidates from the live session: JSON [[name, kind,
+/// detail], …] (measures with units, members, units, ranges, keywords).
+#[no_mangle]
+pub extern "C" fn fml_complete() -> i32 {
+    let session = unsafe {
+        match SESSION.as_ref() {
+            Some(s) => s,
+            None => {
+                set_result("{\"ok\":true,\"items\":[]}".into());
+                return 0;
+            }
+        }
+    };
+    let mut out = String::from("{\"ok\":true,\"items\":[");
+    for (i, (name, kind, detail)) in session.completions().iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        out.push_str(&format!(
+            "[\"{}\",\"{kind}\",\"{}\"]",
+            json_escape(name),
+            json_escape(detail)
+        ));
+    }
+    out.push_str("]}");
+    set_result(out);
+    0
 }
 
 #[no_mangle]

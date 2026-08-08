@@ -32,8 +32,33 @@
   #stats { margin-left:auto; opacity:.85; } #stats b { color: var(--ok); }
   main { flex:1; display:grid; grid-template-columns: minmax(320px, 34%) 1fr; min-height:0; }
   #left { display:flex; flex-direction:column; border-right:1px solid var(--edge); min-height:0; }
-  #src { flex:1; width:100%; border:0; resize:none; padding: .75rem 1rem;
-         font:inherit; background:transparent; outline:none; }
+  #edwrap { flex:1; display:flex; min-height:0; position:relative; }
+  #gutter { padding:.75rem .5rem .75rem .6rem; text-align:right; opacity:.35; user-select:none;
+    overflow:hidden; border-right:1px solid var(--edge); min-width:2.6em; white-space:pre; }
+  #edstack { position:relative; flex:1; min-width:0; }
+  #hl, #src { position:absolute; inset:0; margin:0; padding:.75rem 1rem; font:inherit;
+    line-height:inherit; white-space:pre; tab-size:4; }
+  #hl { overflow:hidden; pointer-events:none; }
+  #hl code { display:block; font:inherit; }
+  #hl .cl { min-height:1.45em; }
+  #src { border:0; resize:none; outline:none; background:transparent; overflow:auto;
+    color:transparent; caret-color: CanvasText; }
+  #src::selection { background: rgba(42,125,209,.25); }
+  .tk-kw { color:#a626a4; font-weight:600; }
+  .tk-ms { color:var(--accent); }
+  .tk-mb { color:#0e8a7d; }
+  .tk-un { color:#1a7f37; }
+  .tk-num, .tk-pct { color:#b25f00; }
+  .tk-cm { color:#8a8a8a; font-style:italic; }
+  .tk-dir { color:#8a8a8a; font-weight:600; }
+  .tk-sym { opacity:.7; }
+  #hl .eline { background: rgba(221,51,51,.14); border-radius:3px; }
+  #comp { position:absolute; z-index:9; background:Canvas; border:1px solid var(--edge);
+    border-radius:6px; box-shadow:0 4px 18px rgba(0,0,0,.25); font-size:.9em;
+    max-height:14em; overflow:auto; min-width:16em; }
+  #comp .ci { padding:.12rem .6rem; cursor:pointer; display:flex; gap:.8rem; }
+  #comp .ci .ck { margin-left:auto; opacity:.55; font-size:.85em; }
+  #comp .ci.sel { background: rgba(42,125,209,.18); }
   #err { color: var(--bad); white-space: pre-wrap; padding:.4rem 1rem;
          border-top:1px solid var(--edge); min-height:1.5rem; }
   #err.on { background: rgba(221,51,51,.12); font-weight:600; }
@@ -117,7 +142,14 @@
 <main>
   <div id="left">
     <div id="ftabs" style="display:none"></div>
-    <textarea id="src" spellcheck="false"></textarea>
+    <div id="edwrap">
+      <div id="gutter">1</div>
+      <div id="edstack">
+        <pre id="hl"><code id="hlcode"></code></pre>
+        <textarea id="src" spellcheck="false" wrap="off"></textarea>
+        <div id="comp" style="display:none"></div>
+      </div>
+    </div>
     <div id="err"></div>
   </div>
   <div id="right"><table id="tbl"></table></div>
@@ -170,6 +202,7 @@ function updateDraftState() {
     fileTexts[activeFile] = diskTexts[activeFile];
     document.getElementById("src").value = fileTexts[activeFile];
     updateDraftState();
+    renderHl();
     loadModel("revert");
   });
 }
@@ -188,6 +221,7 @@ function renderTabs() {
       srcBox.value = fileTexts[n];
       renderTabs();
       updateDraftState();
+      renderHl();
     });
     box.appendChild(b);
   }
@@ -271,6 +305,7 @@ function adoptFiles(files) {
         const top = srcBox.scrollTop;
         srcBox.value = f.src;
         srcBox.scrollTop = top;
+        renderHl();
       }
     }
   });
@@ -369,6 +404,113 @@ function render(r) {
     });
   });
 }
+// ---- the code editor: lexer-driven highlighting, error lines, completion ----
+const hlcode = document.getElementById("hlcode");
+const gutterEl = document.getElementById("gutter");
+let lastErrors = [];   // [{file, line, msg}] from the last load
+const escHtml = t => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+function activeErrLines() {
+  const out = new Set();
+  for (const e of lastErrors) {
+    const key = !e.file || e.file === "model" || e.file === "main" ? mainFile() : e.file;
+    if (key === activeFile && e.line > 0) out.add(e.line);
+  }
+  return out;
+}
+function renderHl() {
+  if (!exports) return;
+  const text = srcBox.value;
+  const errs = activeErrLines();
+  const lines = [];
+  let cur = "";
+  const pushText = (txt, cls) => {
+    const parts = txt.split("\n");
+    parts.forEach((part, i) => {
+      if (part) cur += cls ? `<span class="tk-${cls}">${escHtml(part)}</span>` : escHtml(part);
+      if (i < parts.length - 1) { lines.push(cur); cur = ""; }
+    });
+  };
+  writeInput(text);
+  if (exports.fml_tokens() === 0) {
+    const bytes = enc.encode(text);
+    for (const [k, s0, e0] of readResult().toks) {
+      pushText(dec.decode(bytes.subarray(s0, e0)), k === "ws" || k === "id" ? "" : k);
+    }
+  } else {
+    pushText(text, "");
+  }
+  lines.push(cur);
+  hlcode.innerHTML = lines
+    .map((l, i) => `<div class="cl${errs.has(i + 1) ? " eline" : ""}">${l || "&#8203;"}</div>`)
+    .join("");
+  gutterEl.textContent = lines.map((_, i) => i + 1).join("\n");
+  syncScroll();
+}
+function syncScroll() {
+  const hl = document.getElementById("hl");
+  hl.scrollTop = srcBox.scrollTop;
+  hl.scrollLeft = srcBox.scrollLeft;
+  gutterEl.scrollTop = srcBox.scrollTop;
+}
+
+// ---- completion popup ----
+const compEl = document.getElementById("comp");
+let compItems = [], compSel = 0;
+function currentWord() {
+  const pos = srcBox.selectionStart;
+  const text = srcBox.value;
+  let s0 = pos;
+  while (s0 > 0 && /[A-Za-z0-9_]/.test(text[s0 - 1])) s0--;
+  return { s0, pos, word: text.slice(s0, pos) };
+}
+function hideComp() { compEl.style.display = "none"; compItems = []; }
+function maybeComplete(force) {
+  if (!exports || srcBox.readOnly) return;
+  const { word } = currentWord();
+  if (!force && (word.length < 2 || /^[0-9]/.test(word))) { hideComp(); return; }
+  if (exports.fml_complete() !== 0) return;
+  const items = readResult().items.filter(([n]) => n.startsWith(word) && n !== word);
+  if (!items.length) { hideComp(); return; }
+  compItems = items.slice(0, 12);
+  compSel = 0;
+  renderComp();
+  positionComp();
+}
+function renderComp() {
+  compEl.innerHTML = compItems
+    .map(([n, k, d], i) =>
+      `<div class="ci${i === compSel ? " sel" : ""}" data-i="${i}">${escHtml(n)}<span class="ck">${k}${d ? " · " + escHtml(d) : ""}</span></div>`)
+    .join("");
+  compEl.style.display = "";
+  compEl.querySelectorAll(".ci").forEach(el =>
+    el.addEventListener("mousedown", e => { e.preventDefault(); compSel = Number(el.dataset.i); acceptComp(); }));
+}
+function positionComp() {
+  // Mirror measurement: text up to the caret in a hidden clone.
+  const mirror = document.createElement("div");
+  const cs = getComputedStyle(srcBox);
+  mirror.style.cssText = `position:absolute;visibility:hidden;white-space:pre;font:${cs.font};line-height:${cs.lineHeight};padding:${cs.padding};width:${srcBox.clientWidth}px;`;
+  const upto = srcBox.value.slice(0, srcBox.selectionStart);
+  mirror.textContent = upto;
+  const marker = document.createElement("span");
+  marker.textContent = "\u200b";
+  mirror.appendChild(marker);
+  document.getElementById("edstack").appendChild(mirror);
+  const top = marker.offsetTop - srcBox.scrollTop + 20;
+  const left = Math.min(marker.offsetLeft - srcBox.scrollLeft, srcBox.clientWidth - 200);
+  mirror.remove();
+  compEl.style.top = `${Math.max(0, top)}px`;
+  compEl.style.left = `${Math.max(0, left)}px`;
+}
+function acceptComp() {
+  if (!compItems.length) return;
+  const [name] = compItems[compSel];
+  const { s0, pos } = currentWord();
+  srcBox.setRangeText(name, s0, pos, "end");
+  hideComp();
+  srcBox.dispatchEvent(new Event("input"));
+}
+
 function setErr(msg) {
   const e = document.getElementById("err");
   e.textContent = msg;
@@ -401,6 +543,7 @@ async function loadModel(what) {
     const r = readResult();
     if (rc === 0) {
       loadedOk = true;
+      lastErrors = r.errors || [];
       if (r.warning) setWarn(r.warning); else setErr("");
       prev = {};
       baseVals = {};
@@ -418,13 +561,16 @@ async function loadModel(what) {
       stats(r, (performance.now() - t0) * 1000, label);
       renderTabs();
       render(r);
+      renderHl();
       return;
     }
     const miss = /include "([^"]+)" is not loaded/.exec(r.error || "");
     if (!miss) {
+      lastErrors = r.errors || [];
       setErr(r.error + "   (grid shows the last valid model)");
       loadedOk = false;
       renderTabs();
+      renderHl();
       return;
     }
     const resp = await fetch(miss[1] + "?v=" + Date.now());
@@ -448,7 +594,7 @@ async function refreshFromServer(us, what) {
   render(r);
   const m = await (await fetch(SERVER + "/model")).json();
   const box = document.getElementById("src");
-  if (m.src !== box.value) { const top = box.scrollTop; box.value = m.src; box.scrollTop = top; }
+  if (m.src !== box.value) { const top = box.scrollTop; box.value = m.src; box.scrollTop = top; if (typeof renderHl === "function") renderHl(); }
 }
 if (SERVER) {
   // ---- connected client: server evaluates, we project ----
@@ -510,6 +656,7 @@ function gotoDef(file, line) {
     srcBox.value = fileTexts[key];
     renderTabs();
     updateDraftState();
+    renderHl();
   }
   const lh = parseFloat(getComputedStyle(srcBox).lineHeight) || 19;
   srcBox.scrollTop = Math.max(0, (line - 2) * lh);
@@ -736,6 +883,7 @@ async function switchModel(name) {
   fileTexts[activeFile] = draft !== null ? draft : diskTexts[activeFile];
   srcBox.value = fileTexts[activeFile];
   updateDraftState();
+  renderHl();
   await loadModel(draft !== null ? "draft restored" : "compile+run");
 }
 const mbox = document.getElementById("models");
@@ -749,6 +897,8 @@ for (const m of MODELS) {
 // live text editing: debounced full recompile
 let timer = null;
 srcBox.addEventListener("input", () => {
+  renderHl();
+  maybeComplete(false);
   clearTimeout(timer);
   timer = setTimeout(() => {
     fileTexts[activeFile] = srcBox.value;
@@ -756,6 +906,17 @@ srcBox.addEventListener("input", () => {
     loadModel("recompile");
   }, 350);
 });
+srcBox.addEventListener("scroll", syncScroll);
+srcBox.addEventListener("keydown", e => {
+  if (compEl.style.display !== "none") {
+    if (e.key === "ArrowDown") { e.preventDefault(); compSel = (compSel + 1) % compItems.length; renderComp(); return; }
+    if (e.key === "ArrowUp") { e.preventDefault(); compSel = (compSel + compItems.length - 1) % compItems.length; renderComp(); return; }
+    if (e.key === "Tab" || e.key === "Enter") { e.preventDefault(); acceptComp(); return; }
+    if (e.key === "Escape") { hideComp(); return; }
+  }
+  if (e.key === " " && e.ctrlKey) { e.preventDefault(); maybeComplete(true); }
+});
+srcBox.addEventListener("blur", () => setTimeout(hideComp, 150));
 document.getElementById("saveBtn").addEventListener("click", saveToDisk);
 document.getElementById("addPeriodBtn").addEventListener("click", () => {
   if (SERVER || !loadedOk) return;

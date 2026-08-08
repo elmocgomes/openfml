@@ -47,6 +47,10 @@ pub fn is_keyword(s: &str) -> bool {
     KEYWORDS.contains(&s)
 }
 
+pub fn keywords() -> &'static [&'static str] {
+    &KEYWORDS
+}
+
 const DIMLESS_ALIASES: [&str; 2] = ["rate", "ratio"];
 const KEYWORDS: [&str; 34] = [
     "model", "calendar", "currency", "unit", "input", "solve", "assert", "period",

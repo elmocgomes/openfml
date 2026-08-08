@@ -182,6 +182,17 @@ include \"team.fml\"\ntotal : EUR flow over plan = spend * 2\n";
     assert!(names.contains(&"total") && names.contains(&"plan"), "{names:?}");
     assert!(!names.contains(&"spend"), "include-file symbols excluded: {names:?}");
 
+    // completion → measures with units, keywords
+    let id = lsp.request("textDocument/completion", pos_params(&uri, 4.0, 5.0));
+    let comp = lsp.response(id, &mut diags);
+    let items = comp.as_arr().unwrap();
+    let spend = items
+        .iter()
+        .find(|i| i.get("label").and_then(J::as_str) == Some("spend"))
+        .expect("spend completes");
+    assert!(spend.get("detail").and_then(J::as_str).unwrap().contains("EUR"));
+    assert!(items.iter().any(|i| i.get("label").and_then(J::as_str) == Some("allocate")), "keywords complete");
+
     // break the model → error diagnostic + dropped-dependent warning
     let broken = main_text.replace("= spend * 2", "= spend * * 2");
     lsp.notify(

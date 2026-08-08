@@ -1948,6 +1948,41 @@ impl Session {
         out
     }
 
+    /// Completion candidates: (name, kind tag, detail). Measures carry
+    /// their unit; members their dimension; plus units, ranges, keywords.
+    pub fn completions(&self) -> Vec<(String, &'static str, String)> {
+        let mut out = Vec::new();
+        for (name, &m) in &self.checked.index {
+            let mi = &self.checked.measures[m];
+            let unit = match &mi.munit {
+                crate::check::MUnit::Uniform(u) => format!("{u}"),
+                crate::check::MUnit::Local => "local".into(),
+            };
+            out.push((name.clone(), if mi.is_input { "input" } else { "measure" }, unit));
+        }
+        for (name, &(dim, _)) in &self.checked.member_lookup {
+            out.push((name.clone(), "member", self.checked.dims[dim].name.clone()));
+        }
+        for (name, &dim) in &self.checked.group_lookup {
+            out.push((name.clone(), "group", self.checked.dims[dim].name.clone()));
+        }
+        for d in &self.checked.dims {
+            out.push((d.name.clone(), "dimension", String::new()));
+        }
+        for name in self.checked.unit_reg.keys() {
+            out.push((name.clone(), "unit", String::new()));
+        }
+        for name in self.checked.range_index.keys() {
+            out.push((name.clone(), "range", String::new()));
+        }
+        for kw in crate::parser::keywords() {
+            out.push((kw.to_string(), "keyword", String::new()));
+        }
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        out.dedup_by(|a, b| a.0 == b.0);
+        out
+    }
+
     /// Map a 1-based line of the flat source to (owning file, local line)
     /// through the include source map.
     pub fn locate_line(&self, line: usize) -> (String, usize) {

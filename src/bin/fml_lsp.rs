@@ -36,6 +36,7 @@ fn main() {
                     ("hoverProvider", J::B(true)),
                     ("definitionProvider", J::B(true)),
                     ("documentSymbolProvider", J::B(true)),
+                    ("completionProvider", J::obj(vec![("triggerCharacters", J::A(vec![]))])),
                 ]);
                 respond(id, J::obj(vec![
                     ("capabilities", caps),
@@ -98,6 +99,35 @@ fn main() {
                     ]))
                 });
                 respond(id, r.unwrap_or(J::Null));
+            }
+            "textDocument/completion" => {
+                let uri = msg.path("params.textDocument.uri").and_then(J::as_str).unwrap_or("");
+                let mut items = Vec::new();
+                if let Some(doc) = docs.get(uri) {
+                    if let Some(s) = &doc.session {
+                        for (name, kind, detail) in s.completions() {
+                            let k = match kind {
+                                "keyword" => 14.0,
+                                "member" | "group" => 20.0,
+                                "unit" => 11.0,
+                                "dimension" => 7.0,
+                                "range" => 21.0,
+                                _ => 6.0, // measures & inputs: Variable
+                            };
+                            let detail_s = if detail.is_empty() {
+                                kind.to_string()
+                            } else {
+                                format!("{kind} · {detail}")
+                            };
+                            items.push(J::obj(vec![
+                                ("label", J::S(name)),
+                                ("kind", J::n(k)),
+                                ("detail", J::S(detail_s)),
+                            ]));
+                        }
+                    }
+                }
+                respond(id, J::A(items));
             }
             "textDocument/documentSymbol" => {
                 let uri = msg.path("params.textDocument.uri").and_then(J::as_str).unwrap_or("");
