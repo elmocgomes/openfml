@@ -10,6 +10,13 @@ pub enum Tok {
     Pct(f64),
     /// Single- and multi-char symbols: : = { } ( ) [ ] , + - * / . .. == ±
     Sym(&'static str),
+    /// Trivia (lex_full only): a run of whitespace.
+    Ws,
+    /// Trivia (lex_full only): a `// …` comment (newline not included).
+    Comment,
+    /// A whole `include "…"` line (newline not included) — handled by the
+    /// include expander, opaque to the parser.
+    Directive,
 }
 
 impl fmt::Display for Tok {
@@ -19,7 +26,16 @@ impl fmt::Display for Tok {
             Tok::Num(n) => write!(f, "{n}"),
             Tok::Pct(p) => write!(f, "{}%", p * 100.0),
             Tok::Sym(s) => write!(f, "{s}"),
+            Tok::Ws => write!(f, " "),
+            Tok::Comment => write!(f, "//"),
+            Tok::Directive => write!(f, "include"),
         }
+    }
+}
+
+impl Tok {
+    pub fn is_trivia(&self) -> bool {
+        matches!(self, Tok::Ws | Tok::Comment)
     }
 }
 
@@ -33,6 +49,18 @@ pub struct SpannedTok {
 }
 
 pub fn lex(src: &str) -> Result<Vec<SpannedTok>, String> {
+    let toks = lex_full(src)?;
+    if toks.iter().any(|t| t.tok == Tok::Directive) {
+        return Err("include directives must be expanded before compiling — resolve includes first".into());
+    }
+    Ok(toks.into_iter().filter(|t| !t.tok.is_trivia()).collect())
+}
+
+/// Lossless lexing: every byte of the source lands in exactly one token —
+/// whitespace runs and comments become trivia tokens, whole `include "…"`
+/// lines become directives. The CST is assembled from this stream; the
+/// parser consumes the trivia-filtered view (`lex`).
+pub fn lex_full(src: &str) -> Result<Vec<SpannedTok>, String> {
     let mut out = Vec::new();
     let chars: Vec<char> = src.chars().collect();
     // Byte offset of each char index (chars may be multi-byte in comments).
@@ -45,6 +73,9 @@ pub fn lex(src: &str) -> Result<Vec<SpannedTok>, String> {
     bpos.push(acc);
     let mut i = 0usize;
     let mut line = 1usize;
+    // Has this line seen a non-trivia token yet? (Directives are only
+    // recognized as the first thing on a line, mirroring expand_includes.)
+    let mut line_has_real = false;
     while i < chars.len() {
         let c = chars[i];
         let tstart = i;
@@ -55,15 +86,31 @@ pub fn lex(src: &str) -> Result<Vec<SpannedTok>, String> {
             };
         }
         match c {
-            '\n' => {
-                line += 1;
-                i += 1;
+            ' ' | '\t' | '\r' | '\n' => {
+                while i < chars.len() && matches!(chars[i], ' ' | '\t' | '\r' | '\n') {
+                    if chars[i] == '\n' {
+                        line += 1;
+                        line_has_real = false;
+                    }
+                    i += 1;
+                }
+                emit!(Tok::Ws);
             }
-            ' ' | '\t' | '\r' => i += 1,
             '/' if i + 1 < chars.len() && chars[i + 1] == '/' => {
                 while i < chars.len() && chars[i] != '\n' {
                     i += 1;
                 }
+                emit!(Tok::Comment);
+            }
+            'i' if !line_has_real
+                && chars[i..].starts_with(&['i', 'n', 'c', 'l', 'u', 'd', 'e'])
+                && chars.get(i + 7).map(|c| *c == ' ' || *c == '\t').unwrap_or(false) =>
+            {
+                while i < chars.len() && chars[i] != '\n' {
+                    i += 1;
+                }
+                line_has_real = true;
+                emit!(Tok::Directive);
             }
             c if c.is_ascii_digit() => {
                 let start = i;
@@ -172,6 +219,9 @@ pub fn lex(src: &str) -> Result<Vec<SpannedTok>, String> {
                 emit!(Tok::Sym(s));
             }
             other => return Err(format!("line {line}: unexpected character '{other}'")),
+        }
+        if out.last().map(|t| !t.tok.is_trivia()).unwrap_or(false) {
+            line_has_real = true;
         }
     }
     Ok(out)

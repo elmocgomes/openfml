@@ -22,6 +22,9 @@ pub struct Parser {
     /// `<total> by <driver>`, desugared to a proportional split.
     alloc_mode: bool,
     alloc_parts: Option<(Expr, String)>,
+    /// Top-level declaration boundaries as (start, end) indices into the
+    /// trivia-filtered token stream, tagged by kind — the CST's skeleton.
+    decl_spans: Vec<(usize, usize, &'static str)>,
 }
 
 const DIMLESS_ALIASES: [&str; 2] = ["rate", "ratio"];
@@ -43,6 +46,13 @@ fn lit_kind(e: &Expr) -> Option<LitKind> {
 
 impl Parser {
     pub fn parse(src: &str) -> Result<Model, String> {
+        Ok(Self::parse_with_spans(src)?.0)
+    }
+
+    /// Parse and also return the top-level declaration boundaries (token
+    /// index ranges into the trivia-filtered stream + a kind tag) — the
+    /// skeleton the lossless CST is assembled around.
+    pub fn parse_with_spans(src: &str) -> Result<(Model, Vec<(usize, usize, &'static str)>), String> {
         let toks = lex(src)?;
         let mut p = Parser {
             toks,
@@ -56,8 +66,10 @@ impl Parser {
             dim_names: Vec::new(),
             alloc_mode: false,
             alloc_parts: None,
+            decl_spans: Vec::new(),
         };
-        p.model()
+        let model = p.model()?;
+        Ok((model, std::mem::take(&mut p.decl_spans)))
     }
 
     // ---- token helpers -------------------------------------------------
@@ -220,7 +232,25 @@ impl Parser {
             edit_sites: Vec::new(),
             correlations: Vec::new(),
         };
+        self.decl_spans.push((0, self.pos, "model"));
         while self.peek().is_some() {
+            let d0 = self.pos;
+            let tag: &'static str = match self.peek_ident() {
+                Some("calendar") => "calendar",
+                Some("period") => "period",
+                Some("dimension") => "dimension",
+                Some("functional") => "functional",
+                Some("currency") => "currency",
+                Some("unit") => "unit",
+                Some("input") => "input",
+                Some("solve") => "solve",
+                Some("assert") => "assert",
+                Some("scenario") => "scenario",
+                Some("eliminate") => "eliminate",
+                Some("correlate") => "correlate",
+                Some("allocate") => "allocate",
+                _ => "measure",
+            };
             match self.peek_ident() {
                 Some("calendar") => {
                     self.pos += 1;
@@ -445,6 +475,7 @@ impl Parser {
                     ))
                 }
             }
+            self.decl_spans.push((d0, self.pos, tag));
         }
         model.edit_sites = std::mem::take(&mut self.edit_sites);
         Ok(model)

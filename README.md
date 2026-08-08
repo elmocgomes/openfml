@@ -323,10 +323,32 @@ The scheduler generalizes to the (measure × member × period) micro-graph.
   (`tests/auth.rs`; demonstrated live: 401 without/with forged token,
   403 across ACL, signed commits, and a boot refusal on a
   retroactively edited log).
-- Still ahead: full lossless CST, salsa memoization, LSP, integer
-  minor-unit representation, read-side information-flow control, TLS /
-  reverse-proxy deployment (the token is a bearer credential — put the
-  server behind HTTPS).
+- **The lossless CST, slice 1** (`src/cst.rs`) — the foundation of the
+  editor-tooling arc. A rowan-style **green tree** (position-independent
+  nodes; tokens carry the exact source bytes — comments, whitespace,
+  `1_000_000` spellings, `include` directives) plus a lazy **red
+  cursor** computing absolute offsets on the way down. Assembly needs no
+  second grammar: the trivia-preserving lexer (`lex_full`) and the
+  existing parser's recorded declaration boundaries build the tree, so
+  parser and CST cannot drift. Granularity is the top-level declaration;
+  each declaration owns its leading trivia (a comment above a measure
+  moves with it) and its same-line trailing comment. The defining
+  theorem holds over every model in the repo:
+  `reprint(parse_cst(text)) == text`, byte for byte. Structural edits
+  (`with_child_removed/inserted/replaced`) rebuild only the root spine —
+  removing the Squeeze scenario reprints as the source minus exactly
+  those bytes, reinserting restores byte identity, and every untouched
+  declaration is shared by reference (`Rc::ptr_eq`), tested in
+  `tests/cst.rs`. (Bonus: compiling a file with unexpanded includes now
+  fails with "resolve includes first" instead of a lexer error.)
+- Still ahead — the CST arc continues: error-resilient parsing (broken
+  declarations become error nodes; the rest stays analyzable),
+  edit-sites derived from the CST (retiring the hand-rolled span
+  shifting), expression-level granularity, structural edit operations in
+  the workbench (add period column, rename, add member), then salsa
+  memoization and the LSP. Elsewhere: integer minor-unit
+  representation, read-side information-flow control, TLS /
+  reverse-proxy deployment.
 
 ## Layout
 
