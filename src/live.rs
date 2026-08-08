@@ -30,6 +30,19 @@ pub struct Dep {
     pub via: String,
 }
 
+/// One exact additive contribution to an explained value. The terms of an
+/// explanation always sum to the cell's value (signed) — quantified
+/// provenance, not a sensitivity approximation.
+#[derive(Clone, Debug)]
+pub struct Term {
+    /// Rendered term: a cell display or a compact expression rendering.
+    pub label: String,
+    pub value: f64,
+    /// The cell behind the term when it is exactly one reference —
+    /// (name, member label, period) — making the term drillable.
+    pub cell: Option<(String, String, Option<usize>)>,
+}
+
 /// "Explain this number": where a cell is defined (routed to the owning
 /// file), which match/actuals arm fired, and the direct dependency cells
 /// with their values — the provenance layer, one drill-down step at a time.
@@ -49,6 +62,9 @@ pub struct Explanation {
     /// Nature notes: distribution, solve membership, literal editability.
     pub note: String,
     pub deps: Vec<Dep>,
+    /// Exact additive decomposition of the value (empty for inputs and
+    /// for cells whose top level is not additive-decomposable).
+    pub terms: Vec<Term>,
 }
 
 #[derive(Clone, Debug)]
@@ -70,6 +86,51 @@ pub struct GoalSeekResult {
 /// Reconstruct the achieved output from a residual (f = output - target).
 fn a_target(f: f64, target: f64) -> f64 {
     f + target
+}
+
+/// Compact one-line rendering of an expression for term labels.
+fn render_expr(e: &Expr) -> String {
+    use crate::ast::BinOp;
+    fn atom(e: &Expr) -> String {
+        match e {
+            Expr::Bin(..) => format!("({})", render_expr(e)),
+            _ => render_expr(e),
+        }
+    }
+    match e {
+        Expr::Num(v) => format!("{v}"),
+        Expr::Pct(v) => format!("{}%", v * 100.0),
+        Expr::Qty(v, u) => format!("{v} {u}"),
+        Expr::Ref(n) => n.clone(),
+        Expr::Prev(n, _) => format!("prev({n})"),
+        Expr::Neg(x) => format!("-{}", atom(x)),
+        Expr::Bin(op, a, b) => {
+            let o = match op {
+                BinOp::Add => "+",
+                BinOp::Sub => "−",
+                BinOp::Mul => "×",
+                BinOp::Div => "/",
+                BinOp::Pow => "^",
+            };
+            format!("{} {o} {}", atom(a), atom(b))
+        }
+        Expr::Call(f, args) => {
+            let a: Vec<String> = args.iter().map(render_expr).collect();
+            format!("{f}({})", a.join(", "))
+        }
+        Expr::YearT => "year(t)".into(),
+        Expr::MemberIx { name, members } => format!("{name}[{}]", members.join("][")),
+        Expr::Conv { body, target, .. } => format!("{} in {target}", atom(body)),
+        Expr::At { name, .. } => format!("{name}[t±]"),
+        Expr::WindowSum { name, .. } => format!("sum({name}[…])"),
+        Expr::RangeSum { range, body } => format!("sum[{range}]({})", render_expr(body)),
+        Expr::Npv { range, .. } => format!("npv(… over {range})"),
+        Expr::Irr { name, .. } => format!("irr({name})"),
+        Expr::Annualize(x) => format!("annualize({})", render_expr(x)),
+        Expr::When { value, .. } => format!("{} when …", atom(value)),
+        Expr::MatchT(_) => "match t { … }".into(),
+        Expr::MatchDim { dim, .. } => format!("match {dim} {{ … }}"),
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -968,11 +1029,13 @@ impl Session {
 
         let mut deps = Vec::new();
         let mut arm = String::new();
+        let mut terms = Vec::new();
         if !is_input {
             let asg = self.checked.asg_of_tuple(m, mb);
             let body = mi.body.clone();
             if let Body::Expr(e) = &body {
                 self.collect(e, &asg, t, "", &mut deps, &mut arm)?;
+                self.collect_terms(e, &asg, t, 1.0, &mut terms)?;
             }
         }
         Ok(Explanation {
@@ -987,6 +1050,7 @@ impl Session {
             arm,
             note: notes.join(" · "),
             deps,
+            terms,
         })
     }
 
@@ -1020,6 +1084,235 @@ impl Session {
             is_input: mi.is_input,
             via: via.to_string(),
         });
+    }
+
+    /// A cell-reference term (value read straight from the store, signed).
+    fn push_cell_term(&self, out: &mut Vec<Term>, m: usize, mb: usize, period: Option<isize>, sign: f64) {
+        let mi = &self.checked.measures[m];
+        let (p, value) = if !mi.is_series {
+            (None, self.values[m][mb][0])
+        } else {
+            match period {
+                Some(p) if p >= mi.range.0 as isize && p <= mi.range.1 as isize => {
+                    (Some(p as usize), self.values[m][mb][p as usize])
+                }
+                _ => (None, 0.0),
+            }
+        };
+        let member = if mi.dims.len() == 1 { self.checked.tuple_label(m, mb) } else { String::new() };
+        let disp = if member.is_empty() { mi.name.clone() } else { format!("{}[{member}]", mi.name) };
+        let label = match p {
+            Some(pp) => format!("{disp} @ {}", self.checked.calendar.label(pp)),
+            None => disp,
+        };
+        out.push(Term {
+            label: if sign < 0.0 { format!("− {label}") } else { label },
+            value: sign * value,
+            cell: Some((mi.name.clone(), member, p)),
+        });
+    }
+
+    /// An opaque term: anything non-additive, evaluated as one piece.
+    fn push_expr_term(&mut self, out: &mut Vec<Term>, e: &Expr, asg: &[usize], t: usize, sign: f64) -> Result<(), String> {
+        let v = {
+            let ctx = eval::Ctx { c: &self.checked, values: &mut self.values };
+            ctx.eval(e, asg, t)?
+        };
+        let label = render_expr(e);
+        out.push(Term {
+            label: if sign < 0.0 { format!("− {label}") } else { label },
+            value: sign * v,
+            cell: None,
+        });
+        Ok(())
+    }
+
+    /// Exact additive decomposition of the TAKEN branch: walk +/−, expand
+    /// aggregates, rollups and npv into constituents; everything else is
+    /// one opaque term. The terms always sum to the cell's value.
+    fn collect_terms(&mut self, e: &Expr, asg: &[usize], t: usize, sign: f64, out: &mut Vec<Term>) -> Result<(), String> {
+        use crate::ast::BinOp;
+        match e {
+            Expr::Bin(BinOp::Add, a, b) => {
+                self.collect_terms(a, asg, t, sign, out)?;
+                self.collect_terms(b, asg, t, sign, out)?;
+            }
+            Expr::Bin(BinOp::Sub, a, b) => {
+                self.collect_terms(a, asg, t, sign, out)?;
+                self.collect_terms(b, asg, t, -sign, out)?;
+            }
+            Expr::Neg(x) => self.collect_terms(x, asg, t, -sign, out)?,
+            Expr::Ref(name) => {
+                let m = self.checked.index[name];
+                let mb = self.checked.tuple_of(m, asg)?;
+                self.push_cell_term(out, m, mb, Some(t as isize), sign);
+            }
+            Expr::Prev(name, inline_init) => {
+                let m = self.checked.index[name];
+                let mb = self.checked.tuple_of(m, asg)?;
+                let ts = t as isize - 1;
+                if ts >= self.checked.measures[m].range.0 as isize {
+                    self.push_cell_term(out, m, mb, Some(ts), sign);
+                } else {
+                    let init = inline_init
+                        .as_deref()
+                        .cloned()
+                        .or_else(|| self.checked.measures[m].init.clone());
+                    let v = match &init {
+                        Some(ie) => {
+                            let ctx = eval::Ctx { c: &self.checked, values: &mut self.values };
+                            ctx.eval(ie, asg, t)?
+                        }
+                        None => f64::NAN,
+                    };
+                    let label = format!("{name} init");
+                    out.push(Term {
+                        label: if sign < 0.0 { format!("− {label}") } else { label },
+                        value: sign * v,
+                        cell: None,
+                    });
+                }
+            }
+            Expr::At { name, bound } => {
+                let m = self.checked.index[name];
+                let mb = self.checked.tuple_of(m, asg)?;
+                let at = self.checked.resolve_bound(bound, t)?;
+                self.push_cell_term(out, m, mb, Some(at), sign);
+            }
+            Expr::MemberIx { name, members } => {
+                let m = self.checked.index[name];
+                let mut asgs = vec![asg.to_vec()];
+                for mname in members {
+                    if let Some(&(dim, idx)) = self.checked.member_lookup.get(mname) {
+                        for a in asgs.iter_mut() {
+                            a[dim] = idx;
+                        }
+                    } else if let Some(&dim) = self.checked.group_lookup.get(mname) {
+                        let mut next = Vec::new();
+                        for a in &asgs {
+                            for idx in 0..self.checked.dims[dim].members.len() {
+                                let mut a2 = a.clone();
+                                a2[dim] = idx;
+                                next.push(a2);
+                            }
+                        }
+                        asgs = next;
+                    } else {
+                        return Err(format!("unknown member '{mname}'"));
+                    }
+                }
+                for a in &asgs {
+                    let mb = self.checked.tuple_of(m, a)?;
+                    self.push_cell_term(out, m, mb, Some(t as isize), sign);
+                }
+            }
+            Expr::WindowSum { name, from, to } => {
+                let m = self.checked.index[name];
+                let mb = self.checked.tuple_of(m, asg)?;
+                let a = self.checked.resolve_bound(from, t)?;
+                let b = self.checked.resolve_bound(to, t)?;
+                for at in a..=b {
+                    self.push_cell_term(out, m, mb, Some(at), sign);
+                }
+            }
+            Expr::RangeSum { range, body } => {
+                if let Some(did) = self.checked.dim_by_name(range) {
+                    for c in 0..self.checked.dims[did].members.len() {
+                        let mut a = asg.to_vec();
+                        a[did] = c;
+                        self.collect_terms(body, &a, t, sign, out)?;
+                    }
+                } else {
+                    let r = self
+                        .checked
+                        .range_of(range)
+                        .ok_or_else(|| format!("unknown period range '{range}'"))?
+                        .clone();
+                    for p in r.start..=r.end {
+                        self.collect_terms(body, asg, p, sign, out)?;
+                    }
+                }
+            }
+            Expr::Npv { rate, body, range } => {
+                // The PV bridge: one discounted term per period.
+                let r = self
+                    .checked
+                    .range_of(range)
+                    .ok_or_else(|| format!("unknown period range '{range}'"))?
+                    .clone();
+                let rt = {
+                    let ctx = eval::Ctx { c: &self.checked, values: &mut self.values };
+                    ctx.eval(rate, asg, t)?
+                };
+                for (i, p) in (r.start..=r.end).enumerate() {
+                    let v = {
+                        let ctx = eval::Ctx { c: &self.checked, values: &mut self.values };
+                        ctx.eval(body, asg, p)?
+                    } / (1.0 + rt).powi(i as i32 + 1);
+                    let label = format!("PV @ {}", self.checked.calendar.label(p));
+                    out.push(Term {
+                        label: if sign < 0.0 { format!("− {label}") } else { label },
+                        value: sign * v,
+                        cell: None,
+                    });
+                }
+            }
+            Expr::When { value, pos, range } => {
+                let r = self
+                    .checked
+                    .range_of(range)
+                    .ok_or_else(|| format!("unknown period range '{range}'"))?;
+                let boundary = match pos {
+                    FirstLast::First => r.start,
+                    FirstLast::Last => r.end,
+                };
+                if t == boundary {
+                    self.collect_terms(value, asg, t, sign, out)?;
+                }
+            }
+            Expr::MatchT(arms) => {
+                for (set, e2) in arms {
+                    let base = self
+                        .checked
+                        .range_of(&set.base)
+                        .ok_or_else(|| format!("unknown period range '{}'", set.base))?;
+                    let excluded = match &set.minus {
+                        Some(x) => self
+                            .checked
+                            .range_of(x)
+                            .ok_or_else(|| format!("unknown period range '{x}'"))?
+                            .contains(t),
+                        None => false,
+                    };
+                    if base.contains(t) && !excluded {
+                        return self.collect_terms(e2, asg, t, sign, out);
+                    }
+                }
+            }
+            Expr::MatchDim { dim, arms, default } => {
+                let did = self
+                    .checked
+                    .dim_by_name(dim)
+                    .ok_or_else(|| format!("unknown dimension '{dim}'"))?;
+                let c = asg[did];
+                if c == UNBOUND {
+                    return Err(format!("match on {dim} outside a {dim}-bound context"));
+                }
+                let mname = self.checked.dims[did].members[c].clone();
+                for (arm_member, e2) in arms {
+                    if *arm_member == mname {
+                        return self.collect_terms(e2, asg, t, sign, out);
+                    }
+                }
+                if let Some(def) = default {
+                    return self.collect_terms(def, asg, t, sign, out);
+                }
+            }
+            // Non-additive top level: one opaque term (Mul/Div/Pow, calls,
+            // conversions, literals, irr, annualize, year(t)).
+            other => self.push_expr_term(out, other, asg, t, sign)?,
+        }
+        Ok(())
     }
 
     /// Collect the direct dependency cells of the TAKEN branch of `e`.

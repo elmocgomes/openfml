@@ -563,6 +563,25 @@ pub extern "C" fn fml_explain(period: i32) -> i32 {
                     json_escape(&d.via),
                 ));
             }
+            out.push_str("],\"terms\":[");
+            for (k, tm) in ex.terms.iter().enumerate() {
+                if k > 0 {
+                    out.push(',');
+                }
+                let (cn, cm, ct) = match &tm.cell {
+                    Some((n, mm, p)) => (
+                        format!("\"{}\"", json_escape(n)),
+                        format!("\"{}\"", json_escape(mm)),
+                        p.map(|t| t.to_string()).unwrap_or_else(|| "null".into()),
+                    ),
+                    None => ("null".into(), "null".into(), "null".into()),
+                };
+                out.push_str(&format!(
+                    "{{\"label\":\"{}\",\"value\":{},\"name\":{cn},\"member\":{cm},\"t\":{ct}}}",
+                    json_escape(&tm.label),
+                    json_num(tm.value),
+                ));
+            }
             out.push_str("]}");
             set_result(out);
             0

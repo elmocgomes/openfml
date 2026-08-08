@@ -280,9 +280,21 @@ The scheduler generalizes to the (measure × member × period) micro-graph.
   `loaded_cost`. The float-honest tie-assert tolerance (1e-6) is a
   placeholder for the exact-decimal phase, where conservation becomes
   exact with a remainder-goes-to-largest rounding discipline.
+- **Quantified provenance** — explain now carries an **exact additive
+  decomposition**: the taken branch's +/− structure, aggregate
+  constituents, rollup leaves, and `npv`'s per-period discounted terms
+  (the PV bridge) become signed terms that sum to the cell's value —
+  never a sensitivity approximation. What can't be split additively
+  stays one honestly-labeled term (`sales × margin`). The inspector
+  renders them as **contribution bars** with share percentages (signed
+  bridges read like a waterfall: +1,700 / −1,635 → 65), drillable when a
+  term is a single cell, capped with a Σ-rest row beyond 14 terms
+  (`tests/contrib.rs`). Terms compose with everything: the allocation's
+  loaded_cost splits into own-spend vs allocated overhead, fy_profit
+  into twelve monthly bars.
 - Still ahead: full lossless CST, salsa memoization, LSP, exact decimals
   (+ exact allocation remainders), read-side information-flow control,
-  real authentication, quantified provenance shares (semiring weights).
+  real authentication.
 
 ## Layout
 
