@@ -52,9 +52,10 @@
   td.dup { background: rgba(42,157,58,.18); } td.ddown { background: rgba(221,51,51,.14); }
   #stats { margin-left:auto; opacity:.85; } #stats b { color: var(--ok); }
   main { flex:1; display:grid; grid-template-columns: minmax(280px, 34%) 6px 1fr; min-height:0; }
-  body.view-code main { grid-template-columns: 1fr 0 0 !important; }
+  /* Hidden panes leave the grid flow, so single-pane views use a single
+     column — the remaining pane auto-places into it. */
+  body.view-code main, body.view-grid main { grid-template-columns: 1fr !important; }
   body.view-code #right, body.view-code #split { display:none; }
-  body.view-grid main { grid-template-columns: 0 0 1fr !important; }
   body.view-grid #left, body.view-grid #split { display:none; }
   #left { display:flex; flex-direction:column; border-right:1px solid var(--edge); min-height:0; }
   #edwrap { flex:1; display:flex; min-height:0; position:relative; }
