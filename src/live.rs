@@ -94,6 +94,95 @@ fn fmt_plain(v: f64) -> String {
     format!("{r}")
 }
 
+/// Absolute byte span of the tokens `first..=last` at `path` in `tree`.
+fn span_at(tree: &crate::cst::GreenNode, path: &[usize], first: usize, last: usize) -> (usize, usize) {
+    let mut node = tree;
+    let mut off = 0usize;
+    for &idx in path {
+        for ch in node.children.iter().take(idx) {
+            off += ch.width();
+        }
+        node = match &node.children[idx] {
+            crate::cst::GreenChild::Node(n) => n,
+            crate::cst::GreenChild::Token(_) => unreachable!("paths descend through nodes"),
+        };
+    }
+    let mut sp = off;
+    for tc in node.children.iter().take(first) {
+        sp += tc.width();
+    }
+    let mut ep = sp;
+    for tc in node.children.iter().take(last + 1).skip(first) {
+        ep += tc.width();
+    }
+    (sp, ep)
+}
+
+/// Relocate a token path from one tree to a SEMANTICALLY IDENTICAL tree
+/// whose trivia may differ (the fingerprint-match reuse case): express the
+/// site as non-trivia token ORDINALS within its declaration, then find the
+/// same ordinals in the new tree. Declarations are matched by node
+/// ordinal, so shifting trivia at any level cannot break the mapping.
+fn relocate_path(
+    old_tree: &crate::cst::GreenNode,
+    new_tree: &crate::cst::GreenNode,
+    path: &[usize],
+    first: usize,
+    last: usize,
+) -> Option<(Vec<usize>, usize, usize)> {
+    use crate::cst::{is_trivia_kind, GreenChild};
+    let (s, e) = span_at(old_tree, path, first, last);
+    // Which node-child (declaration) of the root holds the site?
+    let decl_ord = old_tree.children[..path[0]]
+        .iter()
+        .filter(|c| matches!(c, GreenChild::Node(_)))
+        .count();
+    let (old_decl, old_off) = {
+        let mut off = 0usize;
+        for ch in old_tree.children.iter().take(path[0]) {
+            off += ch.width();
+        }
+        match &old_tree.children[path[0]] {
+            GreenChild::Node(n) => (n.as_ref(), off),
+            GreenChild::Token(_) => return None,
+        }
+    };
+    // Ordinal range of the covered non-trivia tokens within the decl.
+    let mut toks = Vec::new();
+    old_decl.flat_tokens(old_off, &mut toks);
+    let nontrivia: Vec<&(crate::cst::SyntaxKind, &str, usize)> =
+        toks.iter().filter(|(k, _, _)| !is_trivia_kind(*k)).collect();
+    let o1 = nontrivia.iter().position(|(_, t, o)| *o < e && s < o + t.len())?;
+    let covered = nontrivia
+        .iter()
+        .filter(|(_, t, o)| *o < e && s < o + t.len())
+        .count();
+    let o2 = o1 + covered - 1;
+    // The same declaration (by node ordinal) in the new tree.
+    let mut seen = 0usize;
+    let mut new_off = 0usize;
+    let mut found: Option<&crate::cst::GreenNode> = None;
+    for ch in &new_tree.children {
+        if let GreenChild::Node(n) = ch {
+            if seen == decl_ord {
+                found = Some(n);
+                break;
+            }
+            seen += 1;
+        }
+        new_off += ch.width();
+    }
+    let new_decl = found?;
+    let mut ntoks = Vec::new();
+    new_decl.flat_tokens(new_off, &mut ntoks);
+    let nnon: Vec<&(crate::cst::SyntaxKind, &str, usize)> =
+        ntoks.iter().filter(|(k, _, _)| !is_trivia_kind(*k)).collect();
+    let (_, t1, s1) = nnon.get(o1)?;
+    let (_, t2, s2) = nnon.get(o2)?;
+    let _ = t1;
+    locate_span(new_tree, 0, *s1, s2 + t2.len())
+}
+
 /// Descend as deep as a single node contains [s, e), then return the
 /// covering token range there — a span's position-independent form.
 fn locate_span(
@@ -179,6 +268,17 @@ fn render_expr(e: &Expr) -> String {
         Expr::MatchT(_) => "match t { … }".into(),
         Expr::MatchDim { dim, .. } => format!("match {dim} {{ … }}"),
     }
+}
+
+/// Outcome of an incremental reload: whether the analysis was reused
+/// wholesale (semantic fingerprints unchanged — the salsa early cutoff)
+/// and, if not, which declarations forced the rebuild.
+#[derive(Clone, Debug)]
+pub struct ReloadStats {
+    pub reused: bool,
+    pub changed: Vec<String>,
+    pub total_decls: usize,
+    pub steps_run: usize,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -371,6 +471,148 @@ impl Session {
             return Err("internal: file texts no longer expand to the flat source".into());
         }
         Ok(exp.segments)
+    }
+
+    /// Incremental reload (the salsa-style early cutoff): re-parse the new
+    /// sources, fingerprint every declaration over its NON-TRIVIA tokens,
+    /// and — if the fingerprint sequences match, flat and per file — keep
+    /// the entire analysis and runtime state, relocating edit-site paths
+    /// by token ordinal. Comment and whitespace edits become free. Any
+    /// semantic difference falls back to a full rebuild, reporting which
+    /// declarations changed.
+    pub fn reload(&mut self, exp: crate::Expanded) -> Result<ReloadStats, String> {
+        use crate::cst::{decl_name, parse_cst, semantic_fingerprint, GreenChild, Red};
+        let new_cst = parse_cst(&exp.flat)?;
+        let old_decls: Vec<&crate::cst::GreenNode> = self
+            .cst
+            .children
+            .iter()
+            .filter_map(|c| match c {
+                GreenChild::Node(n) => Some(n.as_ref()),
+                _ => None,
+            })
+            .collect();
+        let new_decls: Vec<&crate::cst::GreenNode> = new_cst
+            .children
+            .iter()
+            .filter_map(|c| match c {
+                GreenChild::Node(n) => Some(n.as_ref()),
+                _ => None,
+            })
+            .collect();
+        let total_decls = new_decls.len();
+        let same_flat = old_decls.len() == new_decls.len()
+            && old_decls
+                .iter()
+                .zip(new_decls.iter())
+                .all(|(a, b)| semantic_fingerprint(a) == semantic_fingerprint(b));
+
+        // Per-file guard: a declaration moved between files leaves the flat
+        // sequence intact but changes file ownership — check each file's
+        // own fingerprint sequence too.
+        let mut reuse = same_flat && exp.files.len() == self.files.len();
+        let mut new_file_trees = Vec::new();
+        let mut relocate_file = Vec::new();
+        if reuse {
+            for (i, f) in exp.files.iter().enumerate() {
+                if self.files[i].name != f.name {
+                    reuse = false;
+                    break;
+                }
+                if self.files[i].text == f.text {
+                    new_file_trees.push(self.file_trees[i].clone());
+                    relocate_file.push(false);
+                    continue;
+                }
+                let t = parse_cst(&f.text)?;
+                let fps = |tree: &crate::cst::GreenNode| -> Vec<u64> {
+                    tree.children
+                        .iter()
+                        .filter_map(|c| match c {
+                            GreenChild::Node(n) => Some(semantic_fingerprint(n)),
+                            _ => None,
+                        })
+                        .collect()
+                };
+                if fps(&t) != fps(&self.file_trees[i]) {
+                    reuse = false;
+                    break;
+                }
+                new_file_trees.push(t);
+                relocate_file.push(true);
+            }
+        }
+
+        if reuse {
+            // Relocate every site path (flat always; files only if changed).
+            let mut new_site_paths = Vec::with_capacity(self.site_paths.len());
+            for (path, first, last) in &self.site_paths {
+                let p = relocate_path(&self.cst, &new_cst, path, *first, *last)
+                    .ok_or("internal: site path relocation failed on a fingerprint-equal tree")?;
+                new_site_paths.push(p);
+            }
+            let mut new_fsp = Vec::with_capacity(self.file_site_paths.len());
+            for fsp in &self.file_site_paths {
+                match fsp {
+                    Some((f, path, first, last)) if relocate_file[*f] => {
+                        let p = relocate_path(&self.file_trees[*f], &new_file_trees[*f], path, *first, *last)
+                            .ok_or("internal: file site path relocation failed")?;
+                        new_fsp.push(Some((*f, p.0, p.1, p.2)));
+                    }
+                    other => new_fsp.push(other.clone()),
+                }
+            }
+            // Refresh declaration line numbers (comments shift lines). The
+            // line is that of the first NON-TRIVIA token — leading comments
+            // belong to the node but not to the declaration's position.
+            for d in Red::root(&new_cst).decls() {
+                if let Some(name) = decl_name(d.green) {
+                    if let Some(&m) = self.checked.index.get(&name) {
+                        let mut toks = Vec::new();
+                        d.green.flat_tokens(d.offset, &mut toks);
+                        if let Some((_, _, off)) =
+                            toks.iter().find(|(k, _, _)| !crate::cst::is_trivia_kind(*k))
+                        {
+                            self.checked.measures[m].line =
+                                1 + exp.flat[..*off].matches('\n').count();
+                        }
+                    }
+                }
+            }
+            self.src = exp.flat;
+            self.cst = new_cst;
+            self.files = exp.files;
+            self.file_trees = new_file_trees;
+            self.site_paths = new_site_paths;
+            self.file_site_paths = new_fsp;
+            self.expanded = self.files.len() > 1 || self.src != self.files[0].text;
+            return Ok(ReloadStats { reused: true, changed: Vec::new(), total_decls, steps_run: 0 });
+        }
+
+        // Semantic change: full rebuild, naming what forced it.
+        let mut changed = Vec::new();
+        let n = old_decls.len().max(new_decls.len());
+        for i in 0..n {
+            let differs = match (old_decls.get(i), new_decls.get(i)) {
+                (Some(a), Some(b)) => semantic_fingerprint(a) != semantic_fingerprint(b),
+                _ => true,
+            };
+            if differs {
+                let label = new_decls
+                    .get(i)
+                    .or(old_decls.get(i))
+                    .and_then(|d| decl_name(d))
+                    .unwrap_or_else(|| "…".into());
+                if !changed.contains(&label) && changed.len() < 6 {
+                    changed.push(label);
+                }
+            }
+        }
+        let mut fresh = Session::new_expanded(exp)?;
+        fresh.run_full()?;
+        let steps_run = fresh.checked.steps.len();
+        *self = fresh;
+        Ok(ReloadStats { reused: false, changed, total_decls, steps_run })
     }
 
     /// The CURRENT byte span of an edit site, derived from the CST — never

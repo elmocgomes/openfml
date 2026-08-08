@@ -405,7 +405,13 @@ async function loadModel(what) {
       prev = {};
       baseVals = {};
       activeScen = "Base";
-      stats(r, (performance.now() - t0) * 1000, r.warning ? what + " (salvaged)" : what);
+      let label = r.warning ? what + " (salvaged)" : what;
+      if (r.reload) {
+        label += r.reload.reused
+          ? " — no semantic change, analysis reused"
+          : ` — reanalyzed (${r.reload.changed.join(", ") || "structure"})`;
+      }
+      stats(r, (performance.now() - t0) * 1000, label);
       renderTabs();
       render(r);
       return;

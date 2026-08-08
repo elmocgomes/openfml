@@ -174,6 +174,42 @@ impl GreenNode {
     }
 }
 
+/// True for token kinds that carry no meaning (whitespace, comments).
+pub fn is_trivia_kind(k: SyntaxKind) -> bool {
+    matches!(k, SyntaxKind::Whitespace | SyntaxKind::Comment)
+}
+
+/// The semantic fingerprint of a subtree: an FNV-1a hash over its kind
+/// and every non-trivia token — two declarations with equal fingerprints
+/// mean the SAME code, whatever the formatting or comments around it.
+/// This is the early-cutoff key of the incremental (salsa-style) reload.
+pub fn semantic_fingerprint(n: &GreenNode) -> u64 {
+    fn fnv(h: &mut u64, bytes: &[u8]) {
+        for b in bytes {
+            *h ^= *b as u64;
+            *h = h.wrapping_mul(0x100000001b3);
+        }
+    }
+    fn go(n: &GreenNode, h: &mut u64) {
+        fnv(h, &[n.kind as u8, 0xfe]);
+        for c in &n.children {
+            match c {
+                GreenChild::Node(inner) => go(inner, h),
+                GreenChild::Token(t) => {
+                    if !is_trivia_kind(t.kind) {
+                        fnv(h, &[t.kind as u8]);
+                        fnv(h, t.text.as_bytes());
+                        fnv(h, &[0xff]);
+                    }
+                }
+            }
+        }
+    }
+    let mut h = 0xcbf29ce484222325u64;
+    go(n, &mut h);
+    h
+}
+
 /// The canonical name of a declaration node, if it has one: the measure /
 /// input / dimension / … name (the first identifier after the leading
 /// keyword; measures have no keyword, so their first identifier).

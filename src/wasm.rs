@@ -264,6 +264,33 @@ pub extern "C" fn fml_load() -> i32 {
             return 1;
         }
     };
+    // Incremental path: an existing session tries the salsa-style reload
+    // first — a trivia-only edit reuses the whole analysis and runtime
+    // state; a semantic edit rebuilds, naming the changed declarations.
+    if let Some(sess) = unsafe { SESSION.as_mut() } {
+        if let Ok(rs) = sess.reload(expanded.clone()) {
+            let changed: Vec<String> =
+                rs.changed.iter().map(|c| format!("\"{}\"", json_escape(c))).collect();
+            let stats_json = format!(
+                "\"steps_run\":{},\"steps_total\":{},\"nodes_changed\":0,\"reload\":{{\"reused\":{},\"changed\":[{}],\"total\":{}}},",
+                rs.steps_run,
+                rs.steps_run,
+                rs.reused,
+                changed.join(","),
+                rs.total_decls
+            );
+            unsafe {
+                ACTIVE_SCENARIO = None;
+            }
+            let json = {
+                let s = unsafe { SESSION.as_mut().expect("present") };
+                dump_state(s, &stats_json, false)
+            };
+            set_result(json);
+            return 0;
+        }
+        // reload failed to compile → fall through to the salvage path.
+    }
     match Session::new_expanded(expanded.clone()) {
         Ok(mut s) => match s.run_full() {
             Ok(stats) => {

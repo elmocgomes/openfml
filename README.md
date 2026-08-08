@@ -433,9 +433,25 @@ The scheduler generalizes to the (measure × member × period) micro-graph.
   after length-changing patches have moved everything
   (`tests/file_trees.rs`). Regions included more than once are detected
   at session build and marked non-editable, not discovered mid-patch.
-- Still ahead — salsa-style memoization over subtree identity, then the
-  LSP. Elsewhere: integer minor-unit representation, read-side
-  information-flow control, TLS / reverse-proxy deployment.
+- **The salsa-style incremental reload (slice 7)** — early cutoff for
+  the compiler itself. Every declaration gets a **semantic fingerprint**
+  (FNV over its non-trivia tokens), and reload compares sequences: if
+  they match — flat AND per file, so a declaration moved between files
+  is caught even when the flat text agrees — the entire analysis and
+  runtime state are kept. Edit-site paths are relocated by **token
+  ordinal** (immune to trivia shifts), declaration line numbers refresh
+  so explain stays accurate, and the stats line reads "no semantic
+  change, analysis reused: 0/0 steps". A semantic edit rebuilds and
+  **names the culprit** ("reanalyzed (margin)"). Reordering
+  declarations is conservatively a rebuild (order is semantics for
+  solves). The governing theorem, tested across alternating edit
+  sequences: reload ≡ fresh compile, always — and a grid patch
+  immediately after a trivia shift lands on exactly the right tokens
+  (`tests/incr.rs`). Comment edits on any file are now FREE.
+- Still ahead — per-declaration check queries (deepening the cutoff
+  below whole-model analysis), then the LSP. Elsewhere: integer
+  minor-unit representation, read-side information-flow control, TLS /
+  reverse-proxy deployment.
 
 ## Layout
 
