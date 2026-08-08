@@ -173,12 +173,33 @@ impl Session {
         Session::from_parts(exp.flat, exp.files, exp.segments)
     }
 
+    /// Build a session from an already-parsed model (e.g. a SALVAGED one:
+    /// broken declarations dropped) over the original source text.
+    pub fn from_model_parts(
+        model: &crate::ast::Model,
+        src: String,
+        files: Vec<crate::SourceFile>,
+        segments: Vec<crate::Segment>,
+    ) -> Result<Session, String> {
+        let checked = crate::check(model)?;
+        Session::from_checked(checked, src, files, segments)
+    }
+
     fn from_parts(
         src: String,
         files: Vec<crate::SourceFile>,
         segments: Vec<crate::Segment>,
     ) -> Result<Session, String> {
         let checked = crate::compile(&src)?;
+        Session::from_checked(checked, src, files, segments)
+    }
+
+    fn from_checked(
+        checked: Checked,
+        src: String,
+        files: Vec<crate::SourceFile>,
+        segments: Vec<crate::Segment>,
+    ) -> Result<Session, String> {
         let mut values = eval::new_values(&checked);
         eval::init_inputs(&checked, &mut values)?;
         let tols = eval::compute_tols(&checked, &mut values)?;

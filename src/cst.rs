@@ -46,6 +46,9 @@ pub enum SyntaxKind {
     EliminateDecl,
     CorrelateDecl,
     IncludeDirective,
+    /// A declaration that failed to parse — the file's CST still builds
+    /// and reprints losslessly; only this node is semantically opaque.
+    ErrorDecl,
 }
 
 fn tag_kind(tag: &str) -> SyntaxKind {
@@ -64,6 +67,7 @@ fn tag_kind(tag: &str) -> SyntaxKind {
         "eliminate" => SyntaxKind::EliminateDecl,
         "correlate" => SyntaxKind::CorrelateDecl,
         "allocate" => SyntaxKind::AllocateDecl,
+        "error" => SyntaxKind::ErrorDecl,
         _ => SyntaxKind::MeasureDecl,
     }
 }
@@ -254,7 +258,9 @@ pub fn parse_cst(src: &str) -> Result<Rc<GreenNode>, String> {
     } else {
         src
     };
-    let (_, spans) = Parser::parse_with_spans(parse_input)?;
+    // Resilient: broken declarations become ErrorDecl nodes — the CST
+    // exists (and reprints losslessly) even while the file is mid-edit.
+    let (_, spans, _) = Parser::parse_resilient(parse_input)?;
     // Map each real (trivia-filtered) token index to its declaration.
     let n_real = full.iter().filter(|t| !t.tok.is_trivia() && t.tok != Tok::Directive).count();
     let mut decl_of = vec![usize::MAX; n_real];

@@ -134,6 +134,146 @@ pub fn expand_includes(
     expand_includes_with_map("", src, resolver).map(|e| e.flat)
 }
 
+/// Result of a salvage parse: every intact declaration, with broken ones
+/// and their transitive dependents removed — the model that CAN still run
+/// while the file is mid-edit.
+pub struct Salvaged {
+    pub model: ast::Model,
+    pub errors: Vec<parser::ParseError>,
+    /// (declaration, reason) for everything omitted beyond the errors.
+    pub dropped: Vec<(String, String)>,
+}
+
+/// Resilient parse + dependency cascade: broken declarations are recorded,
+/// and any measure/assert/solve/scenario that (transitively) references a
+/// missing name is dropped with a reason. The caller decides whether the
+/// salvaged model checks and runs.
+pub fn parse_salvage(src: &str) -> Result<Salvaged, String> {
+    use std::collections::HashSet;
+    let (mut model, _spans, errors) = Parser::parse_resilient(src)?;
+    let mut dropped: Vec<(String, String)> = Vec::new();
+
+    fn body_names(b: &ast::Body, out: &mut Vec<String>) {
+        match b {
+            ast::Body::Expr(e) => ast::all_names(e, out),
+            ast::Body::Map(entries) => {
+                for (_, e) in entries {
+                    ast::all_names(e, out);
+                }
+            }
+            ast::Body::DimMatch { arms, default, .. } => {
+                for (_, b) in arms {
+                    body_names(b, out);
+                }
+                if let Some(d) = default {
+                    body_names(d, out);
+                }
+            }
+        }
+    }
+    fn measure_refs(m: &ast::MeasureDecl, out: &mut Vec<String>) {
+        body_names(&m.body, out);
+        if let Some((_, e)) = &m.init {
+            ast::all_names(e, out);
+        }
+    }
+
+    loop {
+        let mut defined: HashSet<String> = HashSet::new();
+        for it in &model.items {
+            match it {
+                ast::Item::Measure(m) => {
+                    defined.insert(m.name.clone());
+                }
+                ast::Item::Solve(s) => {
+                    if let ast::SolveForm::Block(ms) = &s.form {
+                        for m in ms {
+                            defined.insert(m.name.clone());
+                        }
+                    }
+                }
+                ast::Item::Assert(_) => {}
+            }
+        }
+        let mut removed_any = false;
+        let mut keep: Vec<ast::Item> = Vec::new();
+        for it in model.items.drain(..) {
+            let mut refs = Vec::new();
+            let who = match &it {
+                ast::Item::Measure(m) => {
+                    measure_refs(m, &mut refs);
+                    m.name.clone()
+                }
+                ast::Item::Assert(a) => {
+                    ast::all_names(&a.lhs, &mut refs);
+                    ast::all_names(&a.rhs, &mut refs);
+                    if let Some(t) = &a.tol {
+                        ast::all_names(t, &mut refs);
+                    }
+                    format!("assert {}", a.name)
+                }
+                ast::Item::Solve(s) => {
+                    match &s.form {
+                        ast::SolveForm::Block(ms) => {
+                            for m in ms {
+                                measure_refs(m, &mut refs);
+                            }
+                        }
+                        ast::SolveForm::Tearing(rs) => {
+                            for r in rs {
+                                refs.push(r.name.clone());
+                                ast::all_names(&r.init, &mut refs);
+                            }
+                        }
+                    }
+                    format!("solve {}", s.name)
+                }
+            };
+            match refs.iter().find(|n| !defined.contains(*n)) {
+                Some(n) => {
+                    dropped.push((who, format!("references missing '{n}'")));
+                    removed_any = true;
+                }
+                None => keep.push(it),
+            }
+        }
+        model.items = keep;
+        if !removed_any {
+            break;
+        }
+    }
+    // Prune scenarios (including chains off dropped parents) and
+    // correlations/edit-sites that target removed declarations.
+    let defined: std::collections::HashSet<String> = model
+        .items
+        .iter()
+        .filter_map(|it| match it {
+            ast::Item::Measure(m) => Some(m.name.clone()),
+            _ => None,
+        })
+        .collect();
+    loop {
+        let names: Vec<String> = model.scenarios.iter().map(|s| s.name.clone()).collect();
+        let before = model.scenarios.len();
+        model.scenarios.retain(|s| {
+            let ok = s.overrides.iter().all(|(t, _, _)| defined.contains(t))
+                && s.from.as_ref().map(|f| f == "Base" || names.contains(f)).unwrap_or(true);
+            if !ok {
+                dropped.push((format!("scenario {}", s.name), "targets a missing declaration".into()));
+            }
+            ok
+        });
+        if model.scenarios.len() == before {
+            break;
+        }
+    }
+    model
+        .correlations
+        .retain(|c| defined.contains(&c.a) && defined.contains(&c.b));
+    model.edit_sites.retain(|e| defined.contains(&e.measure));
+    Ok(Salvaged { model, errors, dropped })
+}
+
 /// Parse + check a source file.
 pub fn compile(src: &str) -> Result<Checked, String> {
     let model = Parser::parse(src)?;

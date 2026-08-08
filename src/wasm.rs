@@ -250,7 +250,7 @@ pub extern "C" fn fml_load() -> i32 {
             return 1;
         }
     };
-    match Session::new_expanded(expanded) {
+    match Session::new_expanded(expanded.clone()) {
         Ok(mut s) => match s.run_full() {
             Ok(stats) => {
                 let stats_json = format!(
@@ -272,9 +272,58 @@ pub extern "C" fn fml_load() -> i32 {
                 1
             }
         },
-        Err(e) => {
-            set_result(format!("{{\"ok\":false,\"error\":\"{}\"}}", json_escape(&e)));
-            1
+        Err(first_err) => {
+            // Salvage: drop broken declarations and their dependents; if
+            // the remainder checks and runs, serve THAT with a warning —
+            // the grid stays live while the file is mid-edit.
+            let attempt = (|| -> Result<(Session, String), String> {
+                let sal = crate::parse_salvage(&expanded.flat)?;
+                if sal.errors.is_empty() && sal.dropped.is_empty() {
+                    return Err(String::new()); // nothing to salvage around
+                }
+                let mut s = Session::from_model_parts(
+                    &sal.model,
+                    expanded.flat.clone(),
+                    expanded.files.clone(),
+                    expanded.segments.clone(),
+                )?;
+                s.run_full()?;
+                let mut warn = sal
+                    .errors
+                    .iter()
+                    .map(|e| e.msg.clone())
+                    .collect::<Vec<_>>()
+                    .join(" · ");
+                if !sal.dropped.is_empty() {
+                    let names: Vec<String> =
+                        sal.dropped.iter().map(|(w, _)| w.clone()).collect();
+                    warn.push_str(&format!("   (also omitted: {})", names.join(", ")));
+                }
+                Ok((s, warn))
+            })();
+            match attempt {
+                Ok((mut s, warn)) => {
+                    unsafe {
+                        ACTIVE_SCENARIO = None;
+                    }
+                    let mut json = dump_state(
+                        &mut s,
+                        "\"steps_run\":0,\"steps_total\":0,\"nodes_changed\":0,",
+                        false,
+                    );
+                    json.pop();
+                    json.push_str(&format!(",\"warning\":\"{}\"}}", json_escape(&warn)));
+                    unsafe {
+                        SESSION = Some(s);
+                    }
+                    set_result(json);
+                    0
+                }
+                Err(_) => {
+                    set_result(format!("{{\"ok\":false,\"error\":\"{}\"}}", json_escape(&first_err)));
+                    1
+                }
+            }
         }
     }
 }

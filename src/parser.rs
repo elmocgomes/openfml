@@ -25,6 +25,19 @@ pub struct Parser {
     /// Top-level declaration boundaries as (start, end) indices into the
     /// trivia-filtered token stream, tagged by kind — the CST's skeleton.
     decl_spans: Vec<(usize, usize, &'static str)>,
+    /// Resilient mode: a broken declaration is recorded and skipped
+    /// (tagged "error" in decl_spans) instead of aborting the parse.
+    recover: bool,
+    errors: Vec<ParseError>,
+}
+
+/// One recovered parse error: the message, the broken declaration's token
+/// range (indices into the trivia-filtered stream), and its first line.
+#[derive(Clone, Debug)]
+pub struct ParseError {
+    pub msg: String,
+    pub tok_range: (usize, usize),
+    pub line: usize,
 }
 
 const DIMLESS_ALIASES: [&str; 2] = ["rate", "ratio"];
@@ -49,13 +62,9 @@ impl Parser {
         Ok(Self::parse_with_spans(src)?.0)
     }
 
-    /// Parse and also return the top-level declaration boundaries (token
-    /// index ranges into the trivia-filtered stream + a kind tag) — the
-    /// skeleton the lossless CST is assembled around.
-    pub fn parse_with_spans(src: &str) -> Result<(Model, Vec<(usize, usize, &'static str)>), String> {
-        let toks = lex(src)?;
-        let mut p = Parser {
-            toks,
+    fn build(src: &str, recover: bool) -> Result<Parser, String> {
+        Ok(Parser {
+            toks: lex(src)?,
             pos: 0,
             unit_names: Vec::new(),
             dim_members: Vec::new(),
@@ -67,9 +76,61 @@ impl Parser {
             alloc_mode: false,
             alloc_parts: None,
             decl_spans: Vec::new(),
-        };
+            recover,
+            errors: Vec::new(),
+        })
+    }
+
+    /// Parse and also return the top-level declaration boundaries (token
+    /// index ranges into the trivia-filtered stream + a kind tag) — the
+    /// skeleton the lossless CST is assembled around.
+    pub fn parse_with_spans(src: &str) -> Result<(Model, Vec<(usize, usize, &'static str)>), String> {
+        let mut p = Parser::build(src, false)?;
         let model = p.model()?;
         Ok((model, std::mem::take(&mut p.decl_spans)))
+    }
+
+    /// Error-RESILIENT parse: a broken declaration is skipped (recorded as
+    /// an "error" span + ParseError) and parsing continues at the next
+    /// declaration start. The returned Model contains every intact
+    /// declaration. Only lexer errors abort.
+    #[allow(clippy::type_complexity)]
+    pub fn parse_resilient(
+        src: &str,
+    ) -> Result<(Model, Vec<(usize, usize, &'static str)>, Vec<ParseError>), String> {
+        let mut p = Parser::build(src, true)?;
+        let model = p.model()?;
+        Ok((model, std::mem::take(&mut p.decl_spans), std::mem::take(&mut p.errors)))
+    }
+
+    /// Skip forward to the next plausible declaration start: a line-leading
+    /// token at brace depth 0 that is a declaration keyword, or an
+    /// identifier followed by ':' or '='.
+    fn skip_to_decl_start(&mut self) {
+        const DECL_KWS: [&str; 13] = [
+            "calendar", "period", "dimension", "functional", "currency", "unit", "input",
+            "solve", "assert", "scenario", "eliminate", "correlate", "allocate",
+        ];
+        let err_line = self.toks.get(self.pos).map(|t| t.line).unwrap_or(usize::MAX);
+        let mut depth = 0i32;
+        while let Some(st) = self.toks.get(self.pos) {
+            match &st.tok {
+                Tok::Sym("{") => depth += 1,
+                Tok::Sym("}") => depth = (depth - 1).max(0),
+                Tok::Ident(id) if depth == 0 && st.line > err_line => {
+                    let starts_decl = DECL_KWS.contains(&id.as_str())
+                        || matches!(
+                            self.toks.get(self.pos + 1).map(|t| &t.tok),
+                            Some(Tok::Sym(":")) | Some(Tok::Sym("="))
+                        );
+                    if starts_decl {
+                        return;
+                    }
+                }
+                _ => {}
+            }
+            self.pos += 1;
+        }
     }
 
     // ---- token helpers -------------------------------------------------
@@ -211,13 +272,23 @@ impl Parser {
 
     // ---- grammar -------------------------------------------------------
     fn model(&mut self) -> Result<Model, String> {
-        if !self.eat_kw("model") {
+        let mut name = String::new();
+        if self.eat_kw("model") {
+            name = self.expect_ident()?;
+            while self.eat_sym(".") {
+                name.push('.');
+                name.push_str(&self.expect_ident()?);
+            }
+        } else if self.recover {
+            // Resilient mode: a missing header is an error, not a wall —
+            // fragments still get a CST and their declarations parse.
+            self.errors.push(ParseError {
+                msg: format!("line {}: file must start with 'model <name>'", self.line()),
+                tok_range: (0, 0),
+                line: self.line(),
+            });
+        } else {
             return Err(format!("line {}: file must start with 'model <name>'", self.line()));
-        }
-        let mut name = self.expect_ident()?;
-        while self.eat_sym(".") {
-            name.push('.');
-            name.push_str(&self.expect_ident()?);
         }
         let mut model = Model {
             name,
@@ -251,6 +322,7 @@ impl Parser {
                 Some("allocate") => "allocate",
                 _ => "measure",
             };
+            let r = (|| -> Result<(), String> {
             match self.peek_ident() {
                 Some("calendar") => {
                     self.pos += 1;
@@ -475,7 +547,29 @@ impl Parser {
                     ))
                 }
             }
-            self.decl_spans.push((d0, self.pos, tag));
+            Ok(())
+            })();
+            match r {
+                Ok(()) => self.decl_spans.push((d0, self.pos, tag)),
+                Err(e) => {
+                    if !self.recover {
+                        return Err(e);
+                    }
+                    // Reset any per-declaration parse state, guarantee
+                    // progress, and resync at the next declaration start.
+                    self.site_buf.clear();
+                    self.cur_member = None;
+                    self.alloc_mode = false;
+                    self.alloc_parts = None;
+                    if self.pos == d0 {
+                        self.pos += 1;
+                    }
+                    self.skip_to_decl_start();
+                    let line = self.toks.get(d0).map(|t| t.line).unwrap_or(0);
+                    self.errors.push(ParseError { msg: e, tok_range: (d0, self.pos), line });
+                    self.decl_spans.push((d0, self.pos, "error"));
+                }
+            }
         }
         model.edit_sites = std::mem::take(&mut self.edit_sites);
         Ok(model)

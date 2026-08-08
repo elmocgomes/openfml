@@ -341,14 +341,29 @@ The scheduler generalizes to the (measure × member × period) micro-graph.
   declaration is shared by reference (`Rc::ptr_eq`), tested in
   `tests/cst.rs`. (Bonus: compiling a file with unexpanded includes now
   fails with "resolve includes first" instead of a lexer error.)
-- Still ahead — the CST arc continues: error-resilient parsing (broken
-  declarations become error nodes; the rest stays analyzable),
-  edit-sites derived from the CST (retiring the hand-rolled span
-  shifting), expression-level granularity, structural edit operations in
-  the workbench (add period column, rename, add member), then salsa
-  memoization and the LSP. Elsewhere: integer minor-unit
-  representation, read-side information-flow control, TLS /
-  reverse-proxy deployment.
+- **Error-resilient parsing + the salvage compile (CST slice 2)** — a
+  broken declaration no longer kills the file. `Parser::parse_resilient`
+  catches the error, resyncs at the next declaration start (line-leading
+  keyword or `ident :`/`ident =` at brace depth 0), records a ParseError
+  with the declaration's span, and keeps going; the CST marks the region
+  as an **ErrorDecl node** and still reprints byte-exactly — the tree
+  exists even while you type garbage (include fragments without a
+  `model` header now get CSTs too). On top sits `parse_salvage`: broken
+  declarations AND their transitive dependents (measures, asserts,
+  solves, scenarios, correlations, edit sites — cascaded via reference
+  analysis to a fixed point) are dropped with reasons, and if the
+  remainder checks, the workbench serves it live. Breaking `sales`
+  mid-edit now shows an **amber warning** — "line 19: expected an
+  expression, found + (also omitted: profit, fy_profit)" — over a live,
+  undimmed grid of everything that survives, instead of freezing the
+  whole model (`tests/resilient.rs`). Strict mode is untouched: the
+  compiler still stops at the first error.
+- Still ahead — the CST arc continues: edit-sites derived from the CST
+  (retiring the hand-rolled span shifting), expression-level
+  granularity, structural edit operations in the workbench (add period
+  column, rename, add member), then salsa memoization and the LSP.
+  Elsewhere: integer minor-unit representation, read-side
+  information-flow control, TLS / reverse-proxy deployment.
 
 ## Layout
 
