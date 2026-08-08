@@ -106,6 +106,8 @@
   <span id="scen"></span>
   <button id="simBtn" title="Monte Carlo over distribution inputs (500 trials)">simulate</button>
   <button id="addPeriodBtn" title="Extend the calendar by one period (full-range maps copy their last entry)">+ period</button>
+  <button id="addMemberBtn" title="Add a member to a dimension (arms inserted into every match)" style="display:none">+ member</button>
+  <span id="amForm" style="display:none"></span>
   <span id="file">
     <button id="saveBtn" title="Save .fml to disk (Ctrl/Cmd+S)">save</button>
     <span id="draftState"></span>
@@ -282,6 +284,8 @@ function syncPatchResult(r2, us, what) {
 }
 function render(r) {
   lastState = r;
+  const amb = document.getElementById("addMemberBtn");
+  if (amb) amb.style.display = !SERVER && r.dims && r.dims.length ? "" : "none";
   renderScenChips(r);
   const inScen = (r.active || "Base") !== "Base";
   let html = "<thead><tr><th>measure</th>" +
@@ -725,6 +729,31 @@ document.getElementById("addPeriodBtn").addEventListener("click", () => {
   const r = readResult();
   adoptFiles(r.files);
   loadModel("added " + r.label);
+});
+document.getElementById("addMemberBtn").addEventListener("click", () => {
+  if (SERVER || !loadedOk || !lastState?.dims?.length) return;
+  const form = document.getElementById("amForm");
+  if (form.style.display !== "none") { form.style.display = "none"; return; }
+  const dims = lastState.dims;
+  form.innerHTML = (dims.length > 1
+      ? `<select id="amDim" style="font:inherit">${dims.map(d => `<option>${d.name}</option>`).join("")}</select> `
+      : "")
+    + `<input id="amName" placeholder="Member" style="width:7em;font:inherit">
+       <input id="amDef" placeholder="default" value="0" style="width:4em;font:inherit">
+       <button id="amGo">add</button>`;
+  form.style.display = "";
+  document.getElementById("amName").focus();
+  document.getElementById("amGo").addEventListener("click", () => {
+    const dim = dims.length > 1 ? document.getElementById("amDim").value : dims[0].name;
+    const name = document.getElementById("amName").value.trim();
+    const def = document.getElementById("amDef").value.trim() || "0";
+    if (!name) return;
+    writeInput(`${dim}|${name}|${def}`);
+    if (exports.fml_add_member() !== 0) { setErr(readResult().error); return; }
+    adoptFiles(readResult().files);
+    form.style.display = "none";
+    loadModel(`added ${dim}:${name}`);
+  });
 });
 document.getElementById("simBtn").addEventListener("click", () => {
   if (SERVER) { setErr("simulate runs in local mode"); return; }

@@ -390,11 +390,25 @@ The scheduler generalizes to the (measure × member × period) micro-graph.
   multi-file budget: 2030 appears in four files at once; renaming
   marketing_spend rewrites the team file's declaration and the master's
   formula in 400 µs.
+- **Add-member (completing the structural-edit trio)** — "we opened a
+  fourth cost center" is now one form: the member joins the dimension's
+  list, and an arm `Member -> default` is inserted into **every**
+  `match Dim { … }` block — token-scanned with brace-depth tracking,
+  multi-line blocks get the arm on its own line, inline blocks stay
+  inline, and blocks with an `else` are left alone (it already covers
+  the newcomer). Tree rollups, allocations, and the conservation
+  asserts pick the member up automatically, and the new member's cells
+  are **immediately grid-editable** (write-back included) after the
+  reload. Guards mirror rename's (all namespaces + keywords); the
+  functional dimension is refused with guidance (a new entity needs a
+  currency mapping). Verified live: adding Support to the budget grew
+  four member rows, kept both asserts green, and an immediate edit of
+  expenses[Support] re-rolled totals incrementally
+  (`tests/edits.rs`).
 - Still ahead — the CST arc continues: expression-level granularity,
-  add-member-to-dimension, per-file trees replacing the segment map,
-  then salsa memoization and the LSP. Elsewhere: integer minor-unit
-  representation, read-side information-flow control, TLS /
-  reverse-proxy deployment.
+  per-file trees replacing the segment map, then salsa memoization and
+  the LSP. Elsewhere: integer minor-unit representation, read-side
+  information-flow control, TLS / reverse-proxy deployment.
 
 ## Layout
 

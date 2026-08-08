@@ -1110,6 +1110,120 @@ impl Session {
         Ok((self.apply_flat_edits(edits)?, new_label))
     }
 
+    /// Add a member to a dimension: extend the member list and insert a
+    /// `member -> default` arm into every `match Dim { … }` block that
+    /// lacks an `else` (which would already cover the newcomer). Tree
+    /// rollups include the member automatically. Refused for the
+    /// functional dimension (a new entity needs a currency mapping).
+    pub fn add_member(&self, dim: &str, member: &str, default: &str) -> Result<Vec<(String, String)>, String> {
+        use crate::cst::{Red, RedChild, SyntaxKind};
+        let did = self
+            .checked
+            .dims
+            .iter()
+            .position(|d| d.name == dim)
+            .ok_or_else(|| format!("unknown dimension '{dim}'"))?;
+        if self.checked.functional_dim == Some(did) {
+            return Err(format!(
+                "'{dim}' carries functional currencies — add the member and its currency mapping in the source"
+            ));
+        }
+        let ok_ident = crate::lexer::lex(member)
+            .ok()
+            .map(|t| t.len() == 1 && matches!(t[0].tok, crate::lexer::Tok::Ident(_)))
+            .unwrap_or(false);
+        if !ok_ident || crate::parser::is_keyword(member) {
+            return Err(format!("'{member}' is not a valid member name"));
+        }
+        let c = &self.checked;
+        if c.member_lookup.contains_key(member)
+            || c.group_lookup.contains_key(member)
+            || c.index.contains_key(member)
+            || c.dims.iter().any(|d| d.name == member)
+            || c.unit_reg.contains_key(member)
+            || c.range_index.contains_key(member)
+        {
+            return Err(format!("'{member}' already names something else in this model"));
+        }
+        if default.trim().is_empty() || crate::lexer::lex(default).is_err() {
+            return Err("the default value must be a valid expression".into());
+        }
+
+        let mut edits: Vec<(usize, usize, String)> = Vec::new();
+        for decl in Red::root(&self.cst).decls() {
+            let toks: Vec<(SyntaxKind, &str, usize)> = decl
+                .children()
+                .into_iter()
+                .filter_map(|ch| match ch {
+                    RedChild::Token { kind, text, offset } => Some((kind, text, offset)),
+                    RedChild::Node(_) => None,
+                })
+                .collect();
+            // 1) The dimension declaration: append after the last member.
+            if decl.green.kind == SyntaxKind::DimensionDecl
+                && crate::cst::decl_name(decl.green).as_deref() == Some(dim)
+            {
+                let last_ident = toks
+                    .iter()
+                    .rev()
+                    .find(|(k, _, _)| *k == SyntaxKind::Ident)
+                    .ok_or("malformed dimension declaration")?;
+                let end = last_ident.2 + last_ident.1.len();
+                edits.push((end, end, format!(", {member}")));
+            }
+            // 2) Every `match <dim> {` block without an `else` arm.
+            let real: Vec<usize> = toks
+                .iter()
+                .enumerate()
+                .filter(|(_, (k, _, _))| {
+                    !matches!(k, SyntaxKind::Whitespace | SyntaxKind::Comment | SyntaxKind::Directive)
+                })
+                .map(|(i, _)| i)
+                .collect();
+            for w in 0..real.len() {
+                let i = real[w];
+                if toks[i].1 != "match" || toks[i].0 != SyntaxKind::Ident {
+                    continue;
+                }
+                let (Some(&i1), Some(&i2)) = (real.get(w + 1), real.get(w + 2)) else { continue };
+                if !(toks[i1].0 == SyntaxKind::Ident && toks[i1].1 == dim && toks[i2].1 == "{") {
+                    continue;
+                }
+                // Find the matching close brace; note any depth-1 `else`.
+                let (mut depth, mut has_else, mut close) = (1i32, false, None);
+                for &j in real.iter().skip(w + 3) {
+                    match toks[j].1 {
+                        "{" => depth += 1,
+                        "}" => {
+                            depth -= 1;
+                            if depth == 0 {
+                                close = Some(j);
+                                break;
+                            }
+                        }
+                        "else" if depth == 1 => has_else = true,
+                        _ => {}
+                    }
+                }
+                let Some(cj) = close else { continue };
+                if has_else {
+                    continue; // the else arm already covers the new member
+                }
+                // Multi-line blocks get the arm on its own line; inline
+                // blocks stay inline.
+                let multiline = toks[cj - 1].0 == SyntaxKind::Whitespace && toks[cj - 1].1.contains('\n');
+                let ins = if multiline {
+                    format!("  {member} -> {default}\n")
+                } else {
+                    format!(" {member} -> {default} ")
+                };
+                let pos = toks[cj].2;
+                edits.push((pos, pos, ins));
+            }
+        }
+        self.apply_flat_edits(edits)
+    }
+
     /// Rename a measure everywhere — token-exact across every file, with
     /// namespace-collision guards. Comments are deliberately untouched.
     pub fn rename_measure(&self, old: &str, new: &str) -> Result<Vec<(String, String)>, String> {

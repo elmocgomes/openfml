@@ -64,7 +64,21 @@ pub fn dump_state(session: &mut Session, stats_json: &str, include_src: bool) ->
         out.push_str(&format!("\"{}\"", json_escape(name)));
     }
     out.push_str("],");
-    out.push_str("\"periods\":[");
+    out.push_str("\"dims\":[");
+    for (k, d) in c.dims.iter().enumerate() {
+        if k > 0 {
+            out.push(',');
+        }
+        out.push_str(&format!("{{\"name\":\"{}\",\"members\":[", json_escape(&d.name)));
+        for (j, m) in d.members.iter().enumerate() {
+            if j > 0 {
+                out.push(',');
+            }
+            out.push_str(&format!("\"{}\"", json_escape(m)));
+        }
+        out.push_str("]}");
+    }
+    out.push_str("],\"periods\":[");
     for t in 0..c.calendar.len {
         if t > 0 {
             out.push(',');
@@ -678,6 +692,37 @@ pub extern "C" fn fml_add_period() -> i32 {
                 json_escape(&label),
                 files_json(&files)
             ));
+            0
+        }
+        Err(e) => {
+            set_result(format!("{{\"ok\":false,\"error\":\"{}\"}}", json_escape(&e)));
+            1
+        }
+    }
+}
+
+/// Structural edit: add a member to a dimension (input buffer
+/// "dim|member|default"). Returns new file texts — the host reloads.
+#[no_mangle]
+pub extern "C" fn fml_add_member() -> i32 {
+    let raw = unsafe { String::from_utf8_lossy(&INPUT_BUF).to_string() };
+    let parts: Vec<&str> = raw.splitn(3, '|').collect();
+    if parts.len() != 3 {
+        set_result("{\"ok\":false,\"error\":\"fml_add_member expects dim|member|default\"}".into());
+        return 1;
+    }
+    let session = unsafe {
+        match SESSION.as_mut() {
+            Some(s) => s,
+            None => {
+                set_result("{\"ok\":false,\"error\":\"no model loaded\"}".into());
+                return 1;
+            }
+        }
+    };
+    match session.add_member(parts[0], parts[1], parts[2]) {
+        Ok(files) => {
+            set_result(format!("{{\"ok\":true,{}}}", files_json(&files)));
             0
         }
         Err(e) => {
