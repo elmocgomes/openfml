@@ -49,6 +49,12 @@ pub enum SyntaxKind {
     /// A declaration that failed to parse — the file's CST still builds
     /// and reprints losslessly; only this node is semantically opaque.
     ErrorDecl,
+    /// The right-hand side of a measure/input declaration (after `=`).
+    Body,
+    /// One `period: value` entry of a map literal.
+    MapEntry,
+    /// One `Member -> …` arm of an input `match Dim { … }` body.
+    MatchArm,
 }
 
 fn tag_kind(tag: &str) -> SyntaxKind {
@@ -153,6 +159,19 @@ impl GreenNode {
         ch.insert(i, new);
         GreenNode::new(self.kind, ch)
     }
+
+    /// Every token of this subtree in order, with absolute offsets
+    /// (given this node's own offset) — nesting flattened away.
+    pub fn flat_tokens<'a>(&'a self, base: usize, out: &mut Vec<(SyntaxKind, &'a str, usize)>) {
+        let mut off = base;
+        for c in &self.children {
+            match c {
+                GreenChild::Node(n) => n.flat_tokens(off, out),
+                GreenChild::Token(t) => out.push((t.kind, t.text.as_str(), off)),
+            }
+            off += c.width();
+        }
+    }
 }
 
 /// The canonical name of a declaration node, if it has one: the measure /
@@ -238,6 +257,14 @@ impl<'a> Red<'a> {
     }
 }
 
+fn sub_kind(tag: &str) -> SyntaxKind {
+    match tag {
+        "entry" => SyntaxKind::MapEntry,
+        "arm" => SyntaxKind::MatchArm,
+        _ => SyntaxKind::Body,
+    }
+}
+
 /// Lex a replacement fragment into green tokens (raw byte slices).
 pub fn lex_green_tokens(text: &str) -> Result<Vec<GreenToken>, String> {
     Ok(lex_full(text)?
@@ -246,26 +273,29 @@ pub fn lex_green_tokens(text: &str) -> Result<Vec<GreenToken>, String> {
         .collect())
 }
 
-/// Replace token children `first..=last` of root child `decl` with `reps`,
-/// rebuilding only the decl node and the root spine — every other
-/// declaration is shared by reference.
-pub fn replace_tokens(
+/// Replace token children `first..=last` of the node at `path` (child
+/// indices from the root) with `reps`, rebuilding only the spine — every
+/// untouched sibling subtree is shared by reference.
+pub fn replace_tokens_at(
     root: &Rc<GreenNode>,
-    decl: usize,
+    path: &[usize],
     first: usize,
     last: usize,
     reps: Vec<GreenToken>,
 ) -> Result<Rc<GreenNode>, String> {
-    let GreenChild::Node(old) = &root.children[decl] else {
-        return Err("replace_tokens: root child is not a declaration node".into());
-    };
-    let mut ch = old.children.clone();
-    if last >= ch.len() || first > last {
-        return Err("replace_tokens: token range out of bounds".into());
+    if path.is_empty() {
+        let mut ch = root.children.clone();
+        if last >= ch.len() || first > last {
+            return Err("replace_tokens_at: token range out of bounds".into());
+        }
+        ch.splice(first..=last, reps.into_iter().map(GreenChild::Token));
+        return Ok(GreenNode::new(root.kind, ch));
     }
-    ch.splice(first..=last, reps.into_iter().map(GreenChild::Token));
-    let new_decl = GreenNode::new(old.kind, ch);
-    Ok(root.with_child_replaced(decl, GreenChild::Node(new_decl)))
+    let GreenChild::Node(inner) = &root.children[path[0]] else {
+        return Err("replace_tokens_at: path descends into a token".into());
+    };
+    let new_inner = replace_tokens_at(inner, &path[1..], first, last, reps)?;
+    Ok(root.with_child_replaced(path[0], GreenChild::Node(new_inner)))
 }
 
 // ---- the builder ---------------------------------------------------------
@@ -290,7 +320,7 @@ pub fn parse_cst(src: &str) -> Result<Rc<GreenNode>, String> {
     };
     // Resilient: broken declarations become ErrorDecl nodes — the CST
     // exists (and reprints losslessly) even while the file is mid-edit.
-    let (_, spans, _) = Parser::parse_resilient(parse_input)?;
+    let (spans, subs) = Parser::parse_tree_spans(parse_input)?;
     // Map each real (trivia-filtered) token index to its declaration.
     let n_real = full.iter().filter(|t| !t.tok.is_trivia() && t.tok != Tok::Directive).count();
     let mut decl_of = vec![usize::MAX; n_real];
@@ -310,18 +340,73 @@ pub fn parse_cst(src: &str) -> Result<Rc<GreenNode>, String> {
         pending.drain(..cut).collect()
     }
 
+    // Nest a declaration's flat (real-index, token) list into Body /
+    // MapEntry / MatchArm nodes per the parser's sub-spans (which nest by
+    // containment; sorted start-asc, end-desc so outer nodes open first).
+    fn nest(tokens: Vec<(Option<usize>, GreenToken)>, subs: &[(usize, usize, SyntaxKind)]) -> Vec<GreenChild> {
+        let mut order: Vec<&(usize, usize, SyntaxKind)> = subs.iter().collect();
+        order.sort_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1)));
+        let mut it = order.into_iter().peekable();
+        let mut stack: Vec<(usize, SyntaxKind, Vec<GreenChild>)> = Vec::new();
+        let mut top: Vec<GreenChild> = Vec::new();
+        for (ridx, tok) in tokens {
+            if let Some(r) = ridx {
+                while let Some((end, _, _)) = stack.last() {
+                    if *end <= r {
+                        let (_, kind, ch) = stack.pop().expect("checked");
+                        let node = GreenChild::Node(GreenNode::new(kind, ch));
+                        match stack.last_mut() {
+                            Some((_, _, parent)) => parent.push(node),
+                            None => top.push(node),
+                        }
+                    } else {
+                        break;
+                    }
+                }
+                while let Some((s0, e0, k)) = it.peek() {
+                    if *s0 == r {
+                        stack.push((*e0, *k, Vec::new()));
+                        it.next();
+                    } else {
+                        break;
+                    }
+                }
+            }
+            match stack.last_mut() {
+                Some((_, _, ch)) => ch.push(GreenChild::Token(tok)),
+                None => top.push(GreenChild::Token(tok)),
+            }
+        }
+        while let Some((_, kind, ch)) = stack.pop() {
+            let node = GreenChild::Node(GreenNode::new(kind, ch));
+            match stack.last_mut() {
+                Some((_, _, parent)) => parent.push(node),
+                None => top.push(node),
+            }
+        }
+        top
+    }
+
     let mut root_children: Vec<GreenChild> = Vec::new();
     let mut pending: Vec<GreenToken> = Vec::new();
-    let mut cur: Option<(usize, Vec<GreenChild>)> = None;
+    // (decl id, flat (real-idx, token) list)
+    let mut cur: Option<(usize, Vec<(Option<usize>, GreenToken)>)> = None;
     let mut real_idx = 0usize;
 
-    let close = |cur: &mut Option<(usize, Vec<GreenChild>)>,
+    let close = |cur: &mut Option<(usize, Vec<(Option<usize>, GreenToken)>)>,
                  pending: &mut Vec<GreenToken>,
                  out: &mut Vec<GreenChild>,
-                 spans: &[(usize, usize, &'static str)]| {
-        if let Some((di, mut ch)) = cur.take() {
-            ch.extend(take_trailing(pending).into_iter().map(GreenChild::Token));
-            out.push(GreenChild::Node(GreenNode::new(tag_kind(spans[di].2), ch)));
+                 spans: &[(usize, usize, &'static str)],
+                 subs: &[(usize, usize, &'static str)]| {
+        if let Some((di, mut toks)) = cur.take() {
+            toks.extend(take_trailing(pending).into_iter().map(|t| (None, t)));
+            let (ds, de, tag) = spans[di];
+            let my_subs: Vec<(usize, usize, SyntaxKind)> = subs
+                .iter()
+                .filter(|(s0, e0, _)| *s0 >= ds && *e0 <= de)
+                .map(|(s0, e0, t)| (*s0, *e0, sub_kind(t)))
+                .collect();
+            out.push(GreenChild::Node(GreenNode::new(tag_kind(tag), nest(toks, &my_subs))));
         }
     };
 
@@ -331,17 +416,13 @@ pub fn parse_cst(src: &str) -> Result<Rc<GreenNode>, String> {
         match &st.tok {
             Tok::Ws | Tok::Comment => pending.push(token),
             Tok::Directive => {
-                // Inside a declaration's token range (e.g. between a solve
-                // block's members) the directive stays inside it —
-                // losslessness first, structure second. AFTER a completed
-                // declaration it is a top-level node.
                 let mid_decl = cur.as_ref().map(|(di, _)| real_idx < spans[*di].1).unwrap_or(false);
                 if mid_decl {
-                    let (_, ch) = cur.as_mut().expect("mid_decl implies open decl");
-                    ch.extend(pending.drain(..).map(GreenChild::Token));
-                    ch.push(GreenChild::Token(token));
+                    let (_, toks) = cur.as_mut().expect("mid_decl implies open decl");
+                    toks.extend(pending.drain(..).map(|t| (None, t)));
+                    toks.push((None, token));
                 } else {
-                    close(&mut cur, &mut pending, &mut root_children, &spans);
+                    close(&mut cur, &mut pending, &mut root_children, &spans, &subs);
                     let mut ch: Vec<GreenChild> =
                         pending.drain(..).map(GreenChild::Token).collect();
                     ch.push(GreenChild::Token(token));
@@ -351,24 +432,25 @@ pub fn parse_cst(src: &str) -> Result<Rc<GreenNode>, String> {
             }
             _ => {
                 let di = decl_of[real_idx];
+                let r = real_idx;
                 real_idx += 1;
                 match cur.as_mut() {
-                    Some((cd, ch)) if *cd == di => {
-                        ch.extend(pending.drain(..).map(GreenChild::Token));
-                        ch.push(GreenChild::Token(token));
+                    Some((cd, toks)) if *cd == di => {
+                        toks.extend(pending.drain(..).map(|t| (None, t)));
+                        toks.push((Some(r), token));
                     }
                     _ => {
-                        close(&mut cur, &mut pending, &mut root_children, &spans);
-                        let mut ch: Vec<GreenChild> =
-                            pending.drain(..).map(GreenChild::Token).collect();
-                        ch.push(GreenChild::Token(token));
-                        cur = Some((di, ch));
+                        close(&mut cur, &mut pending, &mut root_children, &spans, &subs);
+                        let mut toks: Vec<(Option<usize>, GreenToken)> =
+                            pending.drain(..).map(|t| (None, t)).collect();
+                        toks.push((Some(r), token));
+                        cur = Some((di, toks));
                     }
                 }
             }
         }
     }
-    close(&mut cur, &mut pending, &mut root_children, &spans);
+    close(&mut cur, &mut pending, &mut root_children, &spans, &subs);
     // Trailing file trivia lives at root level.
     root_children.extend(pending.drain(..).map(GreenChild::Token));
 

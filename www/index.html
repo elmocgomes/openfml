@@ -561,10 +561,11 @@ function renderInspect() {
     <h3>${cellDisplay(ex.name, ex.member)}${period} = ${fmt(ex.value)} <span class="unit">${ex.unit}</span></h3>
     <div class="meta">defined in <a href="#" id="goDef">${ex.file === "main" || ex.file === "model" ? mainFile() : ex.file}:${ex.line}</a>${ex.arm ? " · " + ex.arm : ""}</div>
     ${ex.note ? `<div class="meta">${ex.note}</div>` : ""}
+    ${ex.body !== undefined ? `<div class="meta">= <code>${ex.body.length > 90 ? ex.body.slice(0, 90) + "…" : ex.body}</code></div>` : ""}
     ${termRows}
     ${depRows}
-    ${!ex.input && ex.period !== null ? '<button id="tornBtn">tornado ±10%</button> ' : ""}${!ex.input ? '<button id="gsBtn">goal seek…</button> ' : ""}<button id="rnBtn">rename…</button>
-    <div id="gsForm"></div><div id="rnForm"></div>`;
+    ${!ex.input && ex.period !== null ? '<button id="tornBtn">tornado ±10%</button> ' : ""}${!ex.input ? '<button id="gsBtn">goal seek…</button> ' : ""}<button id="rnBtn">rename…</button>${ex.body !== undefined ? ' <button id="fxBtn">edit formula…</button>' : ""}
+    <div id="gsForm"></div><div id="rnForm"></div><div id="fxForm"></div>`;
   document.body.appendChild(div);
   div.querySelector(".close").addEventListener("click", () => {
     div.remove();
@@ -655,6 +656,29 @@ function renderInspect() {
       clearHl();
       inspectStack = [];
       loadModel(`renamed ${ex.name} → ${next}`);
+    });
+  });
+  const fx = div.querySelector("#fxBtn");
+  if (fx) fx.addEventListener("click", () => {
+    const form = div.querySelector("#fxForm");
+    form.innerHTML = `<div class="meta" style="margin-top:.4rem">
+      <textarea id="fxBody" rows="3" style="width:100%;font:inherit">${ex.body}</textarea>
+      <button id="fxGo">apply</button> <span id="fxOut"></span></div>`;
+    const ta = form.querySelector("#fxBody");
+    ta.focus();
+    form.querySelector("#fxGo").addEventListener("click", () => {
+      const body = ta.value.trim();
+      if (!body || body === ex.body) return;
+      writeInput(ex.name + "|" + body);
+      if (exports.fml_replace_formula() !== 0) {
+        form.querySelector("#fxOut").textContent = readResult().error;
+        return;
+      }
+      adoptFiles(readResult().files);
+      document.getElementById("inspect")?.remove();
+      clearHl();
+      inspectStack = [];
+      loadModel(`formula of ${ex.name} changed`);
     });
   });
   const tb = div.querySelector("#tornBtn");

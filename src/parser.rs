@@ -29,6 +29,9 @@ pub struct Parser {
     /// (tagged "error" in decl_spans) instead of aborting the parse.
     recover: bool,
     errors: Vec<ParseError>,
+    /// Nested expression-level node boundaries within declarations:
+    /// (start, end) token indices + kind tag ("body" | "entry" | "arm").
+    sub_spans: Vec<(usize, usize, &'static str)>,
 }
 
 /// One recovered parse error: the message, the broken declaration's token
@@ -82,6 +85,7 @@ impl Parser {
             decl_spans: Vec::new(),
             recover,
             errors: Vec::new(),
+            sub_spans: Vec::new(),
         })
     }
 
@@ -105,6 +109,18 @@ impl Parser {
         let mut p = Parser::build(src, true)?;
         let model = p.model()?;
         Ok((model, std::mem::take(&mut p.decl_spans), std::mem::take(&mut p.errors)))
+    }
+
+    /// Resilient parse returning the CST's full skeleton: declaration
+    /// boundaries plus nested expression-level spans (bodies, map
+    /// entries, match arms).
+    #[allow(clippy::type_complexity)]
+    pub fn parse_tree_spans(
+        src: &str,
+    ) -> Result<(Vec<(usize, usize, &'static str)>, Vec<(usize, usize, &'static str)>), String> {
+        let mut p = Parser::build(src, true)?;
+        p.model()?;
+        Ok((std::mem::take(&mut p.decl_spans), std::mem::take(&mut p.sub_spans)))
     }
 
     /// Skip forward to the next plausible declaration start: a line-leading
@@ -565,6 +581,7 @@ impl Parser {
                     self.cur_member = None;
                     self.alloc_mode = false;
                     self.alloc_parts = None;
+                    self.sub_spans.retain(|(s0, _, _)| *s0 < d0);
                     if self.pos == d0 {
                         self.pos += 1;
                     }
@@ -736,6 +753,7 @@ impl Parser {
             // `allocate x : u over Dim, cal = <total> by <driver>` desugars
             // to the proportional split total * driver / sum[Dim](driver).
             self.expect_sym("=")?;
+            let ab0 = self.pos;
             let total = self.expr()?;
             if !self.eat_kw("by") {
                 return Err(format!(
@@ -774,6 +792,7 @@ impl Parser {
                     )),
                 ),
             };
+            self.sub_spans.push((ab0, self.pos, "body"));
             self.site_buf.clear();
             self.alloc_parts = Some((total, dim));
             return Ok(MeasureDecl {
@@ -790,6 +809,7 @@ impl Parser {
         }
         self.expect_sym("=")?;
         self.site_buf.clear();
+        let b0 = self.pos;
         let body = if matches!(self.peek(), Some(Tok::Sym("{"))) {
             // A `{` here is a period map (inputs). `match` bodies start with
             // the keyword, so no ambiguity.
@@ -808,6 +828,7 @@ impl Parser {
             }
             Body::Expr(e)
         };
+        self.sub_spans.push((b0, self.pos, "body"));
         if is_input {
             for (member, period, span, kind) in self.site_buf.drain(..) {
                 self.edit_sites.push(EditSite { measure: name.clone(), member, period, span, kind });
@@ -826,6 +847,7 @@ impl Parser {
         let mut arms = Vec::new();
         let mut default = None;
         loop {
+            let a0 = self.pos;
             let member = self.expect_ident()?;
             self.expect_sym("->")?;
             let is_default = member == "else";
@@ -844,6 +866,7 @@ impl Parser {
                 Body::Expr(e)
             };
             self.cur_member = None;
+            self.sub_spans.push((a0, self.pos, "arm"));
             if is_default {
                 default = Some(Box::new(arm));
             } else {
@@ -861,6 +884,7 @@ impl Parser {
         self.expect_sym("{")?;
         let mut entries = Vec::new();
         loop {
+            let e0 = self.pos;
             let key = self.period_lit()?;
             self.expect_sym(":")?;
             let s0 = self.cur_start();
@@ -869,6 +893,7 @@ impl Parser {
             if let Some(k) = lit_kind(&val) {
                 self.site_buf.push((self.cur_member.clone(), Some(key), (s0, s1), k));
             }
+            self.sub_spans.push((e0, self.pos, "entry"));
             entries.push((key, val));
             if !self.eat_sym(",") {
                 break;
@@ -1283,9 +1308,11 @@ impl Parser {
         let mut arms = Vec::new();
         let mut default = None;
         loop {
+            let a0 = self.pos;
             let member = self.expect_ident()?;
             self.expect_sym("->")?;
             let e = self.expr()?;
+            self.sub_spans.push((a0, self.pos, "arm"));
             if member == "else" {
                 default = Some(Box::new(e));
             } else {

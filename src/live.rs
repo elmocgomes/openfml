@@ -163,10 +163,11 @@ pub struct Session {
     /// from it via `site_paths` — token paths never shift, so the old
     /// span-shifting arithmetic is gone.
     cst: std::rc::Rc<crate::cst::GreenNode>,
-    /// Per edit site: (root child index of the owning declaration, first
-    /// and last token-child indices of the literal). Replacements re-lex
-    /// to the same token count, so paths stay valid across edits.
-    site_paths: Vec<(usize, usize, usize)>,
+    /// Per edit site: (path of child indices from the root to the node
+    /// holding the literal, first/last token-child indices there).
+    /// Replacements re-lex to the same token count, so paths stay valid
+    /// across edits.
+    site_paths: Vec<(Vec<usize>, usize, usize)>,
     tols: Vec<f64>,
     iterations: Vec<(String, Vec<u32>)>,
     /// Predecessors of each micro-node (inverted edges).
@@ -208,41 +209,51 @@ impl Session {
         Session::from_checked(checked, src, files, segments)
     }
 
-    /// Locate every edit site's literal in the CST as a (decl, first
-    /// token, last token) path — the position-independent form of a span.
+    /// Locate every edit site's literal in the CST as a tree path — the
+    /// position-independent form of a span: descend as deep as a single
+    /// node contains the span, then take the covering token range there.
     fn build_site_paths(
         cst: &crate::cst::GreenNode,
         sites: &[(usize, usize, Option<usize>, (usize, usize), LitKind)],
-    ) -> Result<Vec<(usize, usize, usize)>, String> {
-        let mut out = Vec::with_capacity(sites.len());
-        for (_, _, _, (s, e), _) in sites {
-            let mut off = 0usize;
-            let mut found = None;
-            for (ci, child) in cst.children.iter().enumerate() {
-                let w = child.width();
-                if let crate::cst::GreenChild::Node(n) = child {
-                    if *s >= off && *e <= off + w {
-                        // Token-child indices covering [s, e).
-                        let (mut toff, mut first, mut last) = (off, None, None);
-                        for (ti, tc) in n.children.iter().enumerate() {
-                            let tw = tc.width();
-                            if toff < *e && *s < toff + tw {
-                                if first.is_none() {
-                                    first = Some(ti);
-                                }
-                                last = Some(ti);
-                            }
-                            toff += tw;
-                        }
-                        found = Some((ci, first, last));
-                        break;
+    ) -> Result<Vec<(Vec<usize>, usize, usize)>, String> {
+        use crate::cst::{GreenChild, GreenNode};
+        fn locate(n: &GreenNode, base: usize, s: usize, e: usize) -> Option<(Vec<usize>, usize, usize)> {
+            // Descend into a single child node containing the whole span.
+            let mut off = base;
+            for (i, ch) in n.children.iter().enumerate() {
+                let w = ch.width();
+                if s >= off && e <= off + w {
+                    if let GreenChild::Node(inner) = ch {
+                        let (mut p, f, l) = locate(inner, off, s, e)?;
+                        p.insert(0, i);
+                        return Some((p, f, l));
                     }
                 }
                 off += w;
             }
-            match found {
-                Some((ci, Some(f), Some(l))) => out.push((ci, f, l)),
-                _ => return Err(format!("edit site at bytes {s}..{e} not locatable in the CST")),
+            // The span covers a run of THIS node's token children.
+            let mut off2 = base;
+            let (mut first, mut last) = (None, None);
+            for (i, ch) in n.children.iter().enumerate() {
+                let w = ch.width();
+                if off2 < e && s < off2 + w {
+                    if matches!(ch, GreenChild::Node(_)) {
+                        return None; // crosses a subnode boundary — malformed
+                    }
+                    if first.is_none() {
+                        first = Some(i);
+                    }
+                    last = Some(i);
+                }
+                off2 += w;
+            }
+            Some((Vec::new(), first?, last?))
+        }
+        let mut out = Vec::with_capacity(sites.len());
+        for (_, _, _, (s, e), _) in sites {
+            match locate(cst, 0, *s, *e) {
+                Some(p) => out.push(p),
+                None => return Err(format!("edit site at bytes {s}..{e} not locatable in the CST")),
             }
         }
         Ok(out)
@@ -288,24 +299,27 @@ impl Session {
     /// The CURRENT byte span of an edit site, derived from the CST — never
     /// stored, never shifted.
     fn site_span(&self, k: usize) -> (usize, usize) {
-        let (decl, first, last) = self.site_paths[k];
+        let (path, first, last) = &self.site_paths[k];
+        let mut node: &crate::cst::GreenNode = &self.cst;
         let mut off = 0usize;
-        for child in self.cst.children.iter().take(decl) {
-            off += child.width();
+        for &idx in path {
+            for ch in node.children.iter().take(idx) {
+                off += ch.width();
+            }
+            node = match &node.children[idx] {
+                crate::cst::GreenChild::Node(n) => n,
+                crate::cst::GreenChild::Token(_) => unreachable!("site paths descend through nodes"),
+            };
         }
-        let node = match &self.cst.children[decl] {
-            crate::cst::GreenChild::Node(n) => n,
-            crate::cst::GreenChild::Token(_) => unreachable!("site paths point at decl nodes"),
-        };
-        let mut s = off;
-        for tc in node.children.iter().take(first) {
-            s += tc.width();
+        let mut sp = off;
+        for tc in node.children.iter().take(*first) {
+            sp += tc.width();
         }
-        let mut e = s;
-        for tc in node.children.iter().take(last + 1).skip(first) {
-            e += tc.width();
+        let mut ep = sp;
+        for tc in node.children.iter().take(*last + 1).skip(*first) {
+            ep += tc.width();
         }
-        (s, e)
+        (sp, ep)
     }
 
     /// Full evaluation of every step (also resets incremental state).
@@ -899,7 +913,7 @@ impl Session {
         // construction — Num→Num, Pct→Pct, Qty→Num·Ws·Ident), so every
         // site path everywhere stays valid. No span shifting exists.
         let reps = crate::cst::lex_green_tokens(&rep)?;
-        let (decl, first, last) = self.site_paths[k];
+        let (path, first, last) = self.site_paths[k].clone();
         if reps.len() != last - first + 1 {
             return Err(format!(
                 "internal: replacement '{rep}' lexes to {} tokens over a {}-token site",
@@ -907,7 +921,7 @@ impl Session {
                 last - first + 1
             ));
         }
-        self.cst = crate::cst::replace_tokens(&self.cst, decl, first, last, reps)?;
+        self.cst = crate::cst::replace_tokens_at(&self.cst, &path, first, last, reps)?;
         self.src = self.cst.text();
         let delta = rep.len() as isize - old_len as isize;
         for (si, s) in self.segments.iter_mut().enumerate() {
@@ -1066,7 +1080,7 @@ impl Session {
     /// with a copy of its last entry (sub-range maps like closed actuals
     /// keep their range). Returns (new file texts, the new period label).
     pub fn add_period(&self) -> Result<(Vec<(String, String)>, String), String> {
-        use crate::cst::{Red, RedChild, SyntaxKind};
+        use crate::cst::{Red, SyntaxKind};
         let cal = &self.checked.calendar;
         let new_label = cal.label(cal.len);
         let mut edits: Vec<(usize, usize, String)> = Vec::new();
@@ -1077,18 +1091,18 @@ impl Session {
             .find(|d| d.green.kind == SyntaxKind::CalendarDecl)
             .ok_or("no calendar declaration found")?;
         let (mut after_dots, mut s0, mut e0) = (false, None, 0usize);
-        for c in cal_decl.children() {
-            if let RedChild::Token { kind, text, offset } = c {
-                let trivia = matches!(kind, SyntaxKind::Whitespace | SyntaxKind::Comment);
-                if after_dots && !trivia {
-                    if s0.is_none() {
-                        s0 = Some(offset);
-                    }
-                    e0 = offset + text.len();
+        let mut cal_toks: Vec<(SyntaxKind, &str, usize)> = Vec::new();
+        cal_decl.green.flat_tokens(cal_decl.offset, &mut cal_toks);
+        for (kind, text, offset) in cal_toks {
+            let trivia = matches!(kind, SyntaxKind::Whitespace | SyntaxKind::Comment);
+            if after_dots && !trivia {
+                if s0.is_none() {
+                    s0 = Some(offset);
                 }
-                if kind == SyntaxKind::Sym && text == ".." {
-                    after_dots = true;
-                }
+                e0 = offset + text.len();
+            }
+            if kind == SyntaxKind::Sym && text == ".." {
+                after_dots = true;
             }
         }
         let s0 = s0.ok_or("calendar end literal not found")?;
@@ -1116,7 +1130,7 @@ impl Session {
     /// rollups include the member automatically. Refused for the
     /// functional dimension (a new entity needs a currency mapping).
     pub fn add_member(&self, dim: &str, member: &str, default: &str) -> Result<Vec<(String, String)>, String> {
-        use crate::cst::{Red, RedChild, SyntaxKind};
+        use crate::cst::{Red, SyntaxKind};
         let did = self
             .checked
             .dims
@@ -1151,14 +1165,8 @@ impl Session {
 
         let mut edits: Vec<(usize, usize, String)> = Vec::new();
         for decl in Red::root(&self.cst).decls() {
-            let toks: Vec<(SyntaxKind, &str, usize)> = decl
-                .children()
-                .into_iter()
-                .filter_map(|ch| match ch {
-                    RedChild::Token { kind, text, offset } => Some((kind, text, offset)),
-                    RedChild::Node(_) => None,
-                })
-                .collect();
+            let mut toks: Vec<(SyntaxKind, &str, usize)> = Vec::new();
+            decl.green.flat_tokens(decl.offset, &mut toks);
             // 1) The dimension declaration: append after the last member.
             if decl.green.kind == SyntaxKind::DimensionDecl
                 && crate::cst::decl_name(decl.green).as_deref() == Some(dim)
@@ -1222,6 +1230,61 @@ impl Session {
             }
         }
         self.apply_flat_edits(edits)
+    }
+
+    /// The Body node of a named declaration: (red node, trimmed span) —
+    /// trailing trivia excluded so replacements don't eat the newline.
+    fn body_node(&self, name: &str) -> Option<(usize, usize)> {
+        use crate::cst::{GreenChild, Red, RedChild, SyntaxKind};
+        let root = Red::root(&self.cst);
+        let decl = root.decls().into_iter().find(|d| {
+            matches!(
+                d.green.kind,
+                SyntaxKind::MeasureDecl | SyntaxKind::InputDecl | SyntaxKind::AllocateDecl
+            ) && crate::cst::decl_name(d.green).as_deref() == Some(name)
+        })?;
+        for ch in decl.children() {
+            if let RedChild::Node(n) = ch {
+                if n.green.kind == SyntaxKind::Body {
+                    // Trim trailing trivia from the span.
+                    let mut end_rel = 0usize;
+                    let mut acc = 0usize;
+                    for c in &n.green.children {
+                        let w = c.width();
+                        let trivia = matches!(c, GreenChild::Token(t)
+                            if matches!(t.kind, SyntaxKind::Whitespace | SyntaxKind::Comment));
+                        acc += w;
+                        if !trivia {
+                            end_rel = acc;
+                        }
+                    }
+                    return Some((n.offset, n.offset + end_rel));
+                }
+            }
+        }
+        None
+    }
+
+    /// The source text of a declaration's formula (its Body node).
+    pub fn body_text(&self, name: &str) -> Option<String> {
+        let (s, e) = self.body_node(name)?;
+        Some(self.src[s..e].to_string())
+    }
+
+    /// Replace a declaration's formula with new source text (syntax
+    /// pre-checked). Returns new file texts — the caller recompiles, so
+    /// unit/type errors surface through the normal (salvaging) load path.
+    pub fn replace_formula(&self, name: &str, new_body: &str) -> Result<Vec<(String, String)>, String> {
+        let (s, e) = self
+            .body_node(name)
+            .ok_or_else(|| format!("'{name}' has no editable formula (solve members and errors don't)"))?;
+        let probe = format!(
+            "model m\ncalendar plan = yearly 2026 .. 2027\ninput probe_x = {new_body}\n"
+        );
+        if let Err(err) = crate::Parser::parse(&probe) {
+            return Err(format!("not a valid formula: {}", err.replacen("line 3: ", "", 1)));
+        }
+        self.apply_flat_edits(vec![(s, e, new_body.trim().to_string())])
     }
 
     /// Rename a measure everywhere — token-exact across every file, with

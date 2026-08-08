@@ -405,10 +405,24 @@ The scheduler generalizes to the (measure × member × period) micro-graph.
   four member rows, kept both asserts green, and an immediate edit of
   expenses[Support] re-rolled totals incrementally
   (`tests/edits.rs`).
-- Still ahead — the CST arc continues: expression-level granularity,
-  per-file trees replacing the segment map, then salsa memoization and
-  the LSP. Elsewhere: integer minor-unit representation, read-side
-  information-flow control, TLS / reverse-proxy deployment.
+- **Expression-level granularity + formula editing (slice 5)** — the
+  tree deepens below declarations: **Body** (everything after `=`),
+  **MapEntry** (`period: value`), and **MatchArm** nodes, recorded by
+  the real parser as it parses (three instrumentation points — no
+  second grammar) and nested by containment during CST assembly. Edit
+  sites generalized from (decl, tokens) to full **tree paths**, and the
+  structural-edit token scans moved to a flattened iterator, so all
+  fourteen round-trip theorems pass unchanged over the deeper tree. On
+  top, the first formula-level operation: the inspector now SHOWS a
+  cell's formula and offers **edit formula…** — syntax pre-checked
+  ("not a valid formula: expected an expression, found end of file"),
+  replacing exactly the Body node's bytes (trailing trivia preserved),
+  routed to the owning file in multi-file models
+  (`tests/expr_nodes.rs`).
+- Still ahead — the CST arc continues: per-file trees replacing the
+  segment map, then salsa memoization and the LSP. Elsewhere: integer
+  minor-unit representation, read-side information-flow control, TLS /
+  reverse-proxy deployment.
 
 ## Layout
 

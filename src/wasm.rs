@@ -597,8 +597,12 @@ pub extern "C" fn fml_explain(period: i32) -> i32 {
     let p = if period < 0 { None } else { Some(period as usize) };
     match session.explain(&name, member.as_deref(), p) {
         Ok(ex) => {
+            let body = session
+                .body_text(&ex.name)
+                .map(|b| format!("\"body\":\"{}\",", json_escape(&b)))
+                .unwrap_or_default();
             let mut out = format!(
-                "{{\"ok\":true,\"name\":\"{}\",\"member\":\"{}\",\"period\":{},\"label\":\"{}\",\"value\":{},\"unit\":\"{}\",\"input\":{},\"file\":\"{}\",\"line\":{},\"arm\":\"{}\",\"note\":\"{}\",\"deps\":[",
+                "{{\"ok\":true,{body}\"name\":\"{}\",\"member\":\"{}\",\"period\":{},\"label\":\"{}\",\"value\":{},\"unit\":\"{}\",\"input\":{},\"file\":\"{}\",\"line\":{},\"arm\":\"{}\",\"note\":\"{}\",\"deps\":[",
                 json_escape(&ex.name),
                 json_escape(&ex.member),
                 ex.period.map(|t| t.to_string()).unwrap_or_else(|| "null".into()),
@@ -721,6 +725,36 @@ pub extern "C" fn fml_add_member() -> i32 {
         }
     };
     match session.add_member(parts[0], parts[1], parts[2]) {
+        Ok(files) => {
+            set_result(format!("{{\"ok\":true,{}}}", files_json(&files)));
+            0
+        }
+        Err(e) => {
+            set_result(format!("{{\"ok\":false,\"error\":\"{}\"}}", json_escape(&e)));
+            1
+        }
+    }
+}
+
+/// Structural edit: replace a declaration's formula (input buffer
+/// "name|new body text"). Returns new file texts — the host reloads.
+#[no_mangle]
+pub extern "C" fn fml_replace_formula() -> i32 {
+    let raw = unsafe { String::from_utf8_lossy(&INPUT_BUF).to_string() };
+    let Some((name, body)) = raw.split_once('|') else {
+        set_result("{\"ok\":false,\"error\":\"fml_replace_formula expects name|body\"}".into());
+        return 1;
+    };
+    let session = unsafe {
+        match SESSION.as_mut() {
+            Some(s) => s,
+            None => {
+                set_result("{\"ok\":false,\"error\":\"no model loaded\"}".into());
+                return 1;
+            }
+        }
+    };
+    match session.replace_formula(name, body) {
         Ok(files) => {
             set_result(format!("{{\"ok\":true,{}}}", files_json(&files)));
             0
