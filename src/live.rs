@@ -277,8 +277,15 @@ fn render_expr(e: &Expr) -> String {
 pub struct ReloadStats {
     pub reused: bool,
     pub changed: Vec<String>,
+    /// The blast radius: changed measures plus transitive dependents —
+    /// the only measures whose values were recomputed (empty when the
+    /// rebuild had to be conservative/full).
+    pub affected: Vec<String>,
     pub total_decls: usize,
     pub steps_run: usize,
+    /// Reference-query cache performance for this reload.
+    pub query_hits: usize,
+    pub query_misses: usize,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -301,6 +308,9 @@ pub struct Session {
     /// Per edit site: the owning file plus the literal's tree path there
     /// (None = the region is included more than once → not editable).
     file_site_paths: Vec<Option<(usize, Vec<usize>, usize, usize)>>,
+    /// The per-declaration REFERENCES query cache, keyed by semantic
+    /// fingerprint — the first per-decl check query. Survives reloads.
+    ref_cache: std::collections::HashMap<u64, Vec<String>>,
     /// Whether the flat source is an include-expansion of the files (vs a
     /// single file verbatim). The segment map is DERIVED on demand by
     /// re-expanding — never stored, never shifted.
@@ -436,6 +446,7 @@ impl Session {
             files,
             file_trees,
             file_site_paths,
+            ref_cache: std::collections::HashMap::new(),
             expanded,
             cst,
             site_paths,
@@ -586,11 +597,23 @@ impl Session {
             self.site_paths = new_site_paths;
             self.file_site_paths = new_fsp;
             self.expanded = self.files.len() > 1 || self.src != self.files[0].text;
-            return Ok(ReloadStats { reused: true, changed: Vec::new(), total_decls, steps_run: 0 });
+            return Ok(ReloadStats {
+                reused: true,
+                changed: Vec::new(),
+                affected: Vec::new(),
+                total_decls,
+                steps_run: 0,
+                query_hits: 0,
+                query_misses: 0,
+            });
         }
 
-        // Semantic change: full rebuild, naming what forced it.
+        // Semantic change: rebuild the analysis, naming what forced it —
+        // and, when every changed declaration is a measure, re-evaluate
+        // only the BLAST RADIUS (changed + transitive dependents via the
+        // cached references query), copying every other value across.
         let mut changed = Vec::new();
+        let mut changed_all_named = true;
         let n = old_decls.len().max(new_decls.len());
         for i in 0..n {
             let differs = match (old_decls.get(i), new_decls.get(i)) {
@@ -598,21 +621,212 @@ impl Session {
                 _ => true,
             };
             if differs {
-                let label = new_decls
-                    .get(i)
-                    .or(old_decls.get(i))
-                    .and_then(|d| decl_name(d))
-                    .unwrap_or_else(|| "…".into());
-                if !changed.contains(&label) && changed.len() < 6 {
-                    changed.push(label);
+                match new_decls.get(i).or(old_decls.get(i)).and_then(|d| decl_name(d)) {
+                    Some(label) => {
+                        if !changed.contains(&label) {
+                            changed.push(label);
+                        }
+                    }
+                    None => changed_all_named = false,
                 }
             }
         }
-        let mut fresh = Session::new_expanded(exp)?;
-        fresh.run_full()?;
-        let steps_run = fresh.checked.steps.len();
+        // One parse serves both the analysis and the references query.
+        let model = crate::Parser::parse(&exp.flat)?;
+        let mut fresh = Session::from_model_parts(
+            &model,
+            exp.flat.clone(),
+            exp.files.clone(),
+            exp.segments.clone(),
+        )?;
+        // The references query: fingerprint-keyed, carried across reloads.
+        let (mut hits, mut misses) = (0usize, 0usize);
+        let mut cache = std::mem::take(&mut self.ref_cache);
+        let mut refs_by_name: std::collections::HashMap<String, Vec<String>> =
+            std::collections::HashMap::new();
+        {
+            // Every defined name → its references, INCLUDING solve-block
+            // members (so the blast-radius closure propagates into
+            // fixpoints, where the guard below then turns conservative).
+            let mut defined: std::collections::HashMap<&str, Vec<String>> =
+                std::collections::HashMap::new();
+            for it in &model.items {
+                match it {
+                    crate::ast::Item::Measure(m) => {
+                        defined.insert(m.name.as_str(), crate::ast::measure_references(m));
+                    }
+                    crate::ast::Item::Solve(sv) => match &sv.form {
+                        crate::ast::SolveForm::Block(ms) => {
+                            for m in ms {
+                                defined.insert(m.name.as_str(), crate::ast::measure_references(m));
+                            }
+                        }
+                        crate::ast::SolveForm::Tearing(rs) => {
+                            for r in rs {
+                                let mut refs = vec![r.name.clone()];
+                                crate::ast::all_names(&r.init, &mut refs);
+                                defined.insert(r.name.as_str(), refs);
+                            }
+                        }
+                    },
+                    crate::ast::Item::Assert(_) => {}
+                }
+            }
+            // The fingerprint cache covers top-level measure declarations;
+            // solve members ride along uncached (their decl is the solve).
+            let cacheable: std::collections::HashSet<&str> = model
+                .items
+                .iter()
+                .filter_map(|it| match it {
+                    crate::ast::Item::Measure(m) => Some(m.name.as_str()),
+                    _ => None,
+                })
+                .collect();
+            for d in &new_decls {
+                let Some(name) = decl_name(d) else { continue };
+                if !cacheable.contains(name.as_str()) {
+                    continue;
+                }
+                let fp = semantic_fingerprint(d);
+                match cache.get(&fp) {
+                    Some(r) => {
+                        hits += 1;
+                        refs_by_name.insert(name, r.clone());
+                    }
+                    None => {
+                        misses += 1;
+                        let r = defined.get(name.as_str()).cloned().unwrap_or_default();
+                        cache.insert(fp, r.clone());
+                        refs_by_name.insert(name, r);
+                    }
+                }
+            }
+            for (name, refs) in defined {
+                refs_by_name.entry(name.to_string()).or_insert(refs);
+            }
+        }
+        // Blast-radius evaluation is safe only when every changed decl is
+        // a plain measure/input/allocate whose transitive dependents stay
+        // OUTSIDE solve fixpoints — a warm-started Gauss–Seidel converges
+        // to a slightly different point than a fresh run, so bit-exact
+        // equivalence demands the conservative fallback there (as for
+        // dimensions, calendars, asserts and scenarios).
+        let mut affected: std::collections::HashSet<String> = changed.iter().cloned().collect();
+        loop {
+            let before = affected.len();
+            for (name, refs) in &refs_by_name {
+                if !affected.contains(name) && refs.iter().any(|r| affected.contains(r)) {
+                    affected.insert(name.clone());
+                }
+            }
+            if affected.len() == before {
+                break;
+            }
+        }
+        let selective = changed_all_named
+            && !changed.is_empty()
+            && changed.iter().all(|c| {
+                fresh.checked.index.contains_key(c) && self.checked.index.contains_key(c)
+            })
+            && affected.iter().all(|c| {
+                fresh
+                    .checked
+                    .index
+                    .get(c)
+                    .map(|&m| fresh.checked.measures[m].solve.is_none())
+                    .unwrap_or(false)
+            })
+            && fresh.checked.calendar.len == self.checked.calendar.len;
+        let (steps_run, affected_names) = if selective {
+            // Copy every out-of-radius computed value from the old session
+            // (matched by name and shape); inputs re-init from source.
+            for (name, &nm) in &fresh.checked.index {
+                if affected.contains(name) || fresh.checked.measures[nm].is_input {
+                    continue;
+                }
+                let Some(&om) = self.checked.index.get(name) else { continue };
+                if fresh.checked.tuple_count(nm) == self.checked.tuple_count(om)
+                    && fresh.values[nm].len() == self.values[om].len()
+                    && fresh.values[nm].first().map(|r| r.len())
+                        == self.values[om].first().map(|r| r.len())
+                {
+                    fresh.values[nm] = self.values[om].clone();
+                }
+            }
+            let forced: HashSet<usize> = fresh
+                .checked
+                .nodes
+                .iter()
+                .enumerate()
+                .filter(|(_, (m, _, _))| {
+                    affected.contains(&fresh.checked.measures[*m].name)
+                })
+                .map(|(nid, _)| nid)
+                .collect();
+            let steps = fresh.run_steps_forced(&forced)?;
+            let mut names: Vec<String> = affected.into_iter().collect();
+            names.sort();
+            (steps, names)
+        } else {
+            fresh.run_full()?;
+            (fresh.checked.steps.len(), Vec::new())
+        };
+        fresh.ref_cache = cache;
         *self = fresh;
-        Ok(ReloadStats { reused: false, changed, total_decls, steps_run })
+        changed.truncate(6);
+        Ok(ReloadStats {
+            reused: false,
+            changed,
+            affected: affected_names,
+            total_decls,
+            steps_run,
+            query_hits: hits,
+            query_misses: misses,
+        })
+    }
+
+    /// Run the step plan with a FORCE set: a step runs when its nodes are
+    /// forced or when a dependency's value changed (the reload analogue of
+    /// incremental recalc — dirty seeds come from the blast radius).
+    fn run_steps_forced(&mut self, forced: &HashSet<usize>) -> Result<usize, String> {
+        let mut changed: HashSet<usize> = HashSet::new();
+        let steps = self.checked.steps.clone();
+        let mut run = 0usize;
+        for step in &steps {
+            let nodes = self.step_nodes(step);
+            let needs = nodes.iter().any(|nid| forced.contains(nid))
+                || nodes
+                    .iter()
+                    .any(|&nid| self.preds[nid].iter().any(|p| changed.contains(p)));
+            if !needs {
+                continue;
+            }
+            let old: Vec<f64> = nodes
+                .iter()
+                .map(|&nid| {
+                    let (m, mb, t) = self.checked.nodes[nid];
+                    let slot = if self.checked.measures[m].is_series { t } else { 0 };
+                    self.values[m][mb][slot]
+                })
+                .collect();
+            eval::exec_step(
+                &self.checked,
+                &mut self.values,
+                &self.tols,
+                &mut self.iterations,
+                step,
+            )?;
+            run += 1;
+            for (&nid, &before) in nodes.iter().zip(old.iter()) {
+                let (m, mb, t) = self.checked.nodes[nid];
+                let slot = if self.checked.measures[m].is_series { t } else { 0 };
+                if self.values[m][mb][slot] != before {
+                    changed.insert(nid);
+                }
+            }
+        }
+        self.dirty.clear();
+        Ok(run)
     }
 
     /// The CURRENT byte span of an edit site, derived from the CST — never

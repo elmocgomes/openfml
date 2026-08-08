@@ -272,12 +272,15 @@ pub extern "C" fn fml_load() -> i32 {
             let changed: Vec<String> =
                 rs.changed.iter().map(|c| format!("\"{}\"", json_escape(c))).collect();
             let stats_json = format!(
-                "\"steps_run\":{},\"steps_total\":{},\"nodes_changed\":0,\"reload\":{{\"reused\":{},\"changed\":[{}],\"total\":{}}},",
+                "\"steps_run\":{},\"steps_total\":{},\"nodes_changed\":0,\"reload\":{{\"reused\":{},\"changed\":[{}],\"affected\":{},\"total\":{},\"hits\":{},\"misses\":{}}},",
                 rs.steps_run,
                 rs.steps_run,
                 rs.reused,
                 changed.join(","),
-                rs.total_decls
+                rs.affected.len(),
+                rs.total_decls,
+                rs.query_hits,
+                rs.query_misses
             );
             unsafe {
                 ACTIVE_SCENARIO = None;

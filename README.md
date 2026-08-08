@@ -448,10 +448,28 @@ The scheduler generalizes to the (measure × member × period) micro-graph.
   sequences: reload ≡ fresh compile, always — and a grid patch
   immediately after a trivia shift lands on exactly the right tokens
   (`tests/incr.rs`). Comment edits on any file are now FREE.
-- Still ahead — per-declaration check queries (deepening the cutoff
-  below whole-model analysis), then the LSP. Elsewhere: integer
-  minor-unit representation, read-side information-flow control, TLS /
-  reverse-proxy deployment.
+- **Per-declaration queries, slice 1: references + the blast radius
+  (slice 8)** — the first cached check query. Each declaration's
+  `references` (every name its body and init mention, solve members
+  included) is memoized by semantic fingerprint and survives reloads —
+  the second consecutive edit shows one cache miss and a full row of
+  hits. On top of it, a semantic edit to a plain measure/input/allocate
+  now re-evaluates only the **blast radius** — the changed measures
+  plus transitive dependents — copying every out-of-radius value from
+  the old session: editing budget_cap runs 4 steps (cap + headroom),
+  not 40, and the stats line reads "reanalyzed (budget_cap) → 2
+  affected · 7 query hits". The conservatism is principled: if the
+  radius touches a solve fixpoint, evaluation falls back to full —
+  warm-started Gauss–Seidel converges to a slightly different point,
+  and the governing theorem (incremental ≡ from-scratch, bit-exact,
+  every cell) is non-negotiable; that theorem CAUGHT this exact case
+  during development. Structure edits (calendar, dimensions, scenarios,
+  asserts, solves) rebuild fully (`tests/queries.rs`). Analysis itself
+  (unit inference, scheduling) is still whole-model — the remaining
+  deepening, paired with the LSP that would consume it.
+- Still ahead — per-declaration unit-inference/scheduling queries, the
+  LSP. Elsewhere: integer minor-unit representation, read-side
+  information-flow control, TLS / reverse-proxy deployment.
 
 ## Layout
 

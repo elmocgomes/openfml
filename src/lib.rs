@@ -153,29 +153,8 @@ pub fn parse_salvage(src: &str) -> Result<Salvaged, String> {
     let (mut model, _spans, errors) = Parser::parse_resilient(src)?;
     let mut dropped: Vec<(String, String)> = Vec::new();
 
-    fn body_names(b: &ast::Body, out: &mut Vec<String>) {
-        match b {
-            ast::Body::Expr(e) => ast::all_names(e, out),
-            ast::Body::Map(entries) => {
-                for (_, e) in entries {
-                    ast::all_names(e, out);
-                }
-            }
-            ast::Body::DimMatch { arms, default, .. } => {
-                for (_, b) in arms {
-                    body_names(b, out);
-                }
-                if let Some(d) = default {
-                    body_names(d, out);
-                }
-            }
-        }
-    }
     fn measure_refs(m: &ast::MeasureDecl, out: &mut Vec<String>) {
-        body_names(&m.body, out);
-        if let Some((_, e)) = &m.init {
-            ast::all_names(e, out);
-        }
+        out.extend(ast::measure_references(m));
     }
 
     loop {

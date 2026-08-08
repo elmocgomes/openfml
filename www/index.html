@@ -407,9 +407,13 @@ async function loadModel(what) {
       activeScen = "Base";
       let label = r.warning ? what + " (salvaged)" : what;
       if (r.reload) {
-        label += r.reload.reused
-          ? " — no semantic change, analysis reused"
-          : ` — reanalyzed (${r.reload.changed.join(", ") || "structure"})`;
+        if (r.reload.reused) {
+          label += " — no semantic change, analysis reused";
+        } else {
+          label += ` — reanalyzed (${r.reload.changed.join(", ") || "structure"})`;
+          if (r.reload.affected > 0) label += ` → ${r.reload.affected} affected`;
+          if (r.reload.hits > 0) label += ` · ${r.reload.hits} query hits`;
+        }
       }
       stats(r, (performance.now() - t0) * 1000, label);
       renderTabs();

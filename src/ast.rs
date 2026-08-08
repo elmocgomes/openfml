@@ -369,6 +369,38 @@ impl Model {
     }
 }
 
+/// Every name a Body mentions (expressions, map values, match arms).
+pub fn body_references(b: &Body, out: &mut Vec<String>) {
+    match b {
+        Body::Expr(e) => all_names(e, out),
+        Body::Map(entries) => {
+            for (_, e) in entries {
+                all_names(e, out);
+            }
+        }
+        Body::DimMatch { arms, default, .. } => {
+            for (_, b) in arms {
+                body_references(b, out);
+            }
+            if let Some(d) = default {
+                body_references(d, out);
+            }
+        }
+    }
+}
+
+/// Every name a measure declaration references (body + init).
+pub fn measure_references(m: &MeasureDecl) -> Vec<String> {
+    let mut out = Vec::new();
+    body_references(&m.body, &mut out);
+    if let Some((_, e)) = &m.init {
+        all_names(e, &mut out);
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
 /// Every measure name mentioned anywhere in an expression.
 pub fn all_names(e: &Expr, out: &mut Vec<String>) {
     match e {
