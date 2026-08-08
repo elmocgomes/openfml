@@ -467,9 +467,27 @@ The scheduler generalizes to the (measure × member × period) micro-graph.
   asserts, solves) rebuild fully (`tests/queries.rs`). Analysis itself
   (unit inference, scheduling) is still whole-model — the remaining
   deepening, paired with the LSP that would consume it.
-- Still ahead — per-declaration unit-inference/scheduling queries, the
-  LSP. Elsewhere: integer minor-unit representation, read-side
-  information-flow control, TLS / reverse-proxy deployment.
+- **The LSP (slice 9)** — `fml-lsp`, a zero-dependency Language Server
+  over stdio (hand-rolled JSON-RPC framing + a ~250-line JSON module),
+  serving straight from the Session the whole arc built:
+  **diagnostics** on open/change (resilient parse errors with exact
+  lines, salvage-dropped dependents as warnings, check errors located);
+  **hover** with the declaration facts, distribution/solve notes, the
+  formula, and LIVE values; **go-to-definition** that is include-aware —
+  jumping to `spend` from the master file lands in `team.fml` on disk;
+  and **document symbols** (this file's declarations only). Reloads run
+  through the salsa path, so trivia keystrokes cost nothing. Verified by
+  a full end-to-end protocol test that spawns the real binary and
+  speaks LSP to it: initialize → open (clean) → hover (values inline) →
+  definition (into the include) → symbols → break (error surfaces) →
+  fix (diagnostics clear) → shutdown (`tests/lsp.rs`). Wire it to any
+  editor as a generic LSP for `.fml`: command `fml-lsp`, stdio
+  transport, no arguments.
+- Still ahead — per-declaration unit-inference/scheduling queries (the
+  LSP's next speed-up at scale), LSP rename/completion riding the
+  existing rename machinery. Elsewhere: integer minor-unit
+  representation, read-side information-flow control, TLS /
+  reverse-proxy deployment.
 
 ## Layout
 

@@ -10,6 +10,7 @@ pub mod check;
 pub mod crypto;
 pub mod cst;
 pub mod eval;
+pub mod json;
 pub mod lexer;
 pub mod live;
 pub mod parser;

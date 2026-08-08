@@ -1834,6 +1834,120 @@ impl Session {
         self.apply_flat_edits(edits)
     }
 
+    // ---- language intelligence (the LSP's brain) -----------------------
+
+    /// The measure name under a byte offset in one FILE's text (identifier
+    /// token containing the offset, if it names a measure).
+    pub fn measure_at(&self, file: usize, offset: usize) -> Option<String> {
+        let tree = self.file_trees.get(file)?;
+        let mut toks = Vec::new();
+        tree.flat_tokens(0, &mut toks);
+        for (kind, text, off) in toks {
+            if kind == crate::cst::SyntaxKind::Ident && offset >= off && offset < off + text.len() {
+                let name = text.to_string();
+                return self.checked.index.contains_key(&name).then_some(name);
+            }
+        }
+        None
+    }
+
+    /// Markdown hover for a measure: declaration facts, formula, values.
+    pub fn hover_info(&self, name: &str) -> Option<String> {
+        let &m = self.checked.index.get(name)?;
+        let mi = &self.checked.measures[m];
+        let unit = match &mi.munit {
+            crate::check::MUnit::Uniform(u) => format!("{u}"),
+            crate::check::MUnit::Local => "local".into(),
+        };
+        let kind = match mi.kind {
+            Some(crate::ast::Kind::Stock) => " stock",
+            Some(crate::ast::Kind::Flow) => " flow",
+            None => "",
+        };
+        let role = if mi.is_input { "input " } else { "" };
+        let mut md = format!("**{role}{name}** : `{unit}`{kind}");
+        if mi.is_series {
+            md.push_str(&format!(
+                " · {} … {}",
+                self.checked.calendar.label(mi.range.0),
+                self.checked.calendar.label(mi.range.1)
+            ));
+        }
+        if let Some(d) = &mi.dist {
+            let desc = match d {
+                crate::check::Dist::Metalog { .. } => format!("metalog · median {:.4}", d.median()),
+                crate::check::Dist::Uniform { a, b } => format!("uniform({a}, {b})"),
+                crate::check::Dist::Normal { mu, sd } => format!("normal({mu}, {sd})"),
+            };
+            md.push_str(&format!("\n\n~ {desc}"));
+        }
+        if let Some(s) = mi.solve {
+            md.push_str(&format!("\n\ncomputed inside `solve {}`", self.checked.solves[s].name));
+        }
+        if let Some(body) = self.body_text(name) {
+            let short = if body.len() > 120 { format!("{}…", &body[..120]) } else { body };
+            md.push_str(&format!("\n\n```\n= {short}\n```"));
+        }
+        // Values: undimensioned measures only (members would need a pick).
+        if mi.dims.is_empty() {
+            if mi.is_series {
+                let (r0, r1) = mi.range;
+                let shown: Vec<String> = (r0..=r1)
+                    .take(4)
+                    .map(|t| {
+                        format!("{}: {}", self.checked.calendar.label(t), fmt_plain(self.values[m][0][t]))
+                    })
+                    .collect();
+                let ell = if r1 - r0 + 1 > 4 {
+                    format!(" … {}: {}", self.checked.calendar.label(r1), fmt_plain(self.values[m][0][r1]))
+                } else {
+                    String::new()
+                };
+                md.push_str(&format!("\n\n{}{}", shown.join(" · "), ell));
+            } else {
+                md.push_str(&format!("\n\n= **{}**", fmt_plain(self.values[m][0][0])));
+            }
+        }
+        Some(md)
+    }
+
+    /// Where a measure is declared: (owning file name, 1-based local line).
+    pub fn definition_of(&self, name: &str) -> Option<(String, usize)> {
+        let &m = self.checked.index.get(name)?;
+        Some(self.locate_line(self.checked.measures[m].line))
+    }
+
+    /// The document's declarations for outline views:
+    /// (name, kind tag, owning file, 1-based local line).
+    pub fn symbols(&self) -> Vec<(String, &'static str, String, usize)> {
+        use crate::cst::{decl_name, Red, SyntaxKind};
+        let mut out = Vec::new();
+        for d in Red::root(&self.cst).decls() {
+            let Some(name) = decl_name(d.green) else { continue };
+            let kind = match d.green.kind {
+                SyntaxKind::InputDecl => "input",
+                SyntaxKind::MeasureDecl => "measure",
+                SyntaxKind::AllocateDecl => "allocate",
+                SyntaxKind::SolveDecl => "solve",
+                SyntaxKind::AssertDecl => "assert",
+                SyntaxKind::ScenarioDecl => "scenario",
+                SyntaxKind::DimensionDecl => "dimension",
+                SyntaxKind::CalendarDecl => "calendar",
+                _ => continue,
+            };
+            let mut toks = Vec::new();
+            d.green.flat_tokens(d.offset, &mut toks);
+            let Some((_, _, off)) = toks.iter().find(|(k, _, _)| !crate::cst::is_trivia_kind(*k))
+            else {
+                continue;
+            };
+            let flat_line = 1 + self.src[..*off].matches('\n').count();
+            let (file, line) = self.locate_line(flat_line);
+            out.push((name, kind, file, line));
+        }
+        out
+    }
+
     /// Map a 1-based line of the flat source to (owning file, local line)
     /// through the include source map.
     pub fn locate_line(&self, line: usize) -> (String, usize) {

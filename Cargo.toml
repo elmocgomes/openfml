@@ -16,3 +16,7 @@ path = "src/main.rs"
 [[bin]]
 name = "fml-server"
 path = "src/bin/fml_server.rs"
+
+[[bin]]
+name = "fml-lsp"
+path = "src/bin/fml_lsp.rs"
