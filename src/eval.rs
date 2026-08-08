@@ -166,6 +166,66 @@ impl<'a> Ctx<'a> {
                 }
                 acc
             }
+            Expr::AllocShare { total, driver, dim, dp, policy } => {
+                let did = self
+                    .c
+                    .dim_by_name(dim)
+                    .ok_or_else(|| format!("unknown dimension '{dim}'"))?;
+                let me = asg[did];
+                if me == UNBOUND {
+                    return Err(format!("allocate over {dim} outside a {dim}-bound context"));
+                }
+                let tot = self.eval(total, asg, t)?;
+                let n = self.c.dims[did].members.len();
+                let mut drv = Vec::with_capacity(n);
+                for c in 0..n {
+                    let mut a = asg.to_vec();
+                    a[did] = c;
+                    drv.push(self.eval(driver, &a, t)?);
+                }
+                let dsum: f64 = drv.iter().sum();
+                if dsum == 0.0 {
+                    return Err(format!(
+                        "allocate: driver sum over {dim} is zero at {}",
+                        self.c.calendar.label(t)
+                    ));
+                }
+                // Largest-remainder in minor units of 10^-dp: floor every
+                // raw share, then hand the residual units to the largest
+                // fractional remainders (ties → member order). The slices
+                // re-add to the rounded pot EXACTLY.
+                let f = 10f64.powi(*dp as i32);
+                let target = (policy.apply(tot, *dp) * f).round() as i64;
+                let mut floors = Vec::with_capacity(n);
+                let mut rems = Vec::with_capacity(n);
+                for c in 0..n {
+                    let raw = tot * drv[c] / dsum * f;
+                    floors.push(raw.floor() as i64);
+                    rems.push(raw - raw.floor());
+                }
+                let mut give = target - floors.iter().sum::<i64>();
+                let mut order: Vec<usize> = (0..n).collect();
+                order.sort_by(|&a, &b| {
+                    rems[b]
+                        .partial_cmp(&rems[a])
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                        .then(a.cmp(&b))
+                });
+                let mut bonus = vec![0i64; n];
+                let mut k = 0usize;
+                while give != 0 {
+                    let idx = if give > 0 { order[k % n] } else { order[n - 1 - (k % n)] };
+                    if give > 0 {
+                        bonus[idx] += 1;
+                        give -= 1;
+                    } else {
+                        bonus[idx] -= 1;
+                        give += 1;
+                    }
+                    k += 1;
+                }
+                (floors[me] + bonus[me]) as f64 / f
+            }
             Expr::RangeSum { range, body } => {
                 if let Some(did) = self.c.dim_by_name(range) {
                     let mut acc = 0.0;
@@ -301,7 +361,16 @@ impl<'a> Ctx<'a> {
 
     fn store(&mut self, m: usize, mb: usize, t: usize, v: f64) {
         let slot = if self.c.measures[m].is_series { t } else { 0 };
-        self.values[m][mb][slot] = v;
+        self.values[m][mb][slot] = snap(&self.c.measures[m], v);
+    }
+}
+
+/// Store-time rounding: a `round dp policy` measure snaps every stored
+/// value to its declared decimals — downstream readers see posted amounts.
+pub(crate) fn snap(mi: &MeasureInfo, v: f64) -> f64 {
+    match mi.round {
+        Some((dp, policy)) => policy.apply(v, dp),
+        None => v,
     }
 }
 
@@ -430,18 +499,18 @@ pub fn init_inputs(c: &Checked, values: &mut Values) -> Result<(), String> {
                         let v = *by_idx.get(&t).ok_or_else(|| {
                             format!("input '{}' has no value for {}", mi.name, c.calendar.label(t))
                         })?;
-                        values[i][mb][t] = v;
+                        values[i][mb][t] = snap(&c.measures[i], v);
                     }
                 }
                 (Body::Expr(e), true) => {
                     for t in mi.range.0..=mi.range.1 {
                         let v = Ctx { c, values }.eval(&e, &asg, t)?;
-                        values[i][mb][t] = v;
+                        values[i][mb][t] = snap(&c.measures[i], v);
                     }
                 }
                 (Body::Expr(e), false) => {
                     let v = Ctx { c, values }.eval(&e, &asg, 0)?;
-                    values[i][mb][0] = v;
+                    values[i][mb][0] = snap(&c.measures[i], v);
                 }
                 (Body::Map(_), false) => unreachable!(),
                 (Body::DimMatch { .. }, _) => unreachable!("resolved above"),

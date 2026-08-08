@@ -124,6 +124,9 @@ fn render_expr(e: &Expr) -> String {
         Expr::At { name, .. } => format!("{name}[t±]"),
         Expr::WindowSum { name, .. } => format!("sum({name}[…])"),
         Expr::RangeSum { range, body } => format!("sum[{range}]({})", render_expr(body)),
+        Expr::AllocShare { total, driver, dp, .. } => {
+            format!("{} by {} (round {dp})", atom(total), atom(driver))
+        }
         Expr::Npv { range, .. } => format!("npv(… over {range})"),
         Expr::Irr { name, .. } => format!("irr({name})"),
         Expr::Annualize(x) => format!("annualize({})", render_expr(x)),
@@ -269,6 +272,8 @@ impl Session {
         } else {
             vec![0]
         };
+        // A rounded input snaps at store time, like any posted amount.
+        let value = eval::snap(mi, value);
         for t in slots {
             if self.values[m][mb][t] != value {
                 self.values[m][mb][t] = value;
@@ -686,6 +691,7 @@ impl Session {
                 }
             }
             for (t, v) in writes {
+                let v = eval::snap(&self.checked.measures[m], v);
                 if self.values[m][mb][t] != v {
                     self.values[m][mb][t] = v;
                     let key = (m, mb, if is_series { t } else { 0 });
@@ -1512,6 +1518,20 @@ impl Session {
                         *arm = format!("match {dim} → else ({mname})");
                     }
                     return self.collect(def, asg, t, via, deps, arm);
+                }
+            }
+            Expr::AllocShare { total, driver, dim, .. } => {
+                self.collect(total, asg, t, via, deps, arm)?;
+                // The member's own driver, then the full allocation basis.
+                self.collect(driver, asg, t, via, deps, arm)?;
+                let did = self
+                    .checked
+                    .dim_by_name(dim)
+                    .ok_or_else(|| format!("unknown dimension '{dim}'"))?;
+                for c in 0..self.checked.dims[did].members.len() {
+                    let mut a = asg.to_vec();
+                    a[did] = c;
+                    self.collect(driver, &a, t, "sum", deps, arm)?;
                 }
             }
             Expr::Conv { body, rate, .. } => {

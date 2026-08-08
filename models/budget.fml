@@ -23,7 +23,7 @@ input headcount : hc flow over CostCenter, plan = match CostCenter {
   Engineering -> 45
   Operations  -> 18
 }
-allocate overhead_share : kEUR flow over CostCenter, plan = overhead by headcount
+allocate overhead_share : kEUR flow over CostCenter, plan round 2 = overhead by headcount
 loaded_cost : kEUR flow over CostCenter, plan = expenses + overhead_share
 
 total_expenses : kEUR flow over plan = expenses[Total]

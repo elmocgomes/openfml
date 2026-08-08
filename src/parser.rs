@@ -25,10 +25,10 @@ pub struct Parser {
 }
 
 const DIMLESS_ALIASES: [&str; 2] = ["rate", "ratio"];
-const KEYWORDS: [&str; 33] = [
+const KEYWORDS: [&str; 34] = [
     "model", "calendar", "currency", "unit", "input", "solve", "assert", "period",
     "over", "init", "tolerance", "max_iterations", "prev", "relax", "when", "match", "in",
-    "dimension", "functional", "at", "eliminate", "against", "scenario", "from", "actuals", "until", "metalog", "uniform", "normal", "correlate", "per", "allocate", "by",
+    "dimension", "functional", "at", "eliminate", "against", "scenario", "from", "actuals", "until", "metalog", "uniform", "normal", "correlate", "per", "allocate", "by", "round",
 ];
 
 fn lit_kind(e: &Expr) -> Option<LitKind> {
@@ -376,7 +376,13 @@ impl Parser {
                     let m = m?;
                     let (total, dim) = self.alloc_parts.take().expect("allocate sets parts");
                     // Conservation by construction, proven by a tie-assert:
-                    // the allocated pieces must re-add to the total.
+                    // the allocated pieces must re-add to the total. With
+                    // `round dp` the slices sum EXACTLY to the rounded pot,
+                    // which sits within half a minor unit of the raw pot.
+                    let tol = match m.round {
+                        Some((dp, _)) => 0.5 * 10f64.powi(-(dp as i32)) + 1e-9,
+                        None => 1e-6,
+                    };
                     let over_cal = m.over.iter().find(|o| **o != dim).cloned();
                     model.items.push(Item::Measure(m.clone()));
                     model.items.push(Item::Assert(AssertDecl {
@@ -385,7 +391,7 @@ impl Parser {
                         lhs: Expr::RangeSum { range: dim, body: Box::new(Expr::Ref(m.name.clone())) },
                         op: CmpOp::Eq,
                         rhs: total,
-                        tol: Some(Expr::Num(1e-6)),
+                        tol: Some(Expr::Num(tol)),
                         line: m.line,
                     }));
                 }
@@ -508,6 +514,35 @@ impl Parser {
                 init = Some((label, e));
             }
         }
+        // `round <dp> [half_up|half_even|floor|ceil]` — typed rounding.
+        let round = if self.eat_kw("round") {
+            let dp_num = match self.peek() {
+                Some(Tok::Num(n)) => Some(*n),
+                _ => None,
+            };
+            let dp = match dp_num {
+                Some(n) if n >= 0.0 && n.fract() == 0.0 && n <= 9.0 => {
+                    self.pos += 1;
+                    n as u32
+                }
+                _ => {
+                    return Err(format!(
+                        "line {}: round needs a decimal count 0..9 (e.g. 'round 2')",
+                        self.line()
+                    ))
+                }
+            };
+            let policy = match self.peek_ident() {
+                Some("half_up") => { self.pos += 1; RoundPolicy::HalfUp }
+                Some("half_even") => { self.pos += 1; RoundPolicy::HalfEven }
+                Some("floor") => { self.pos += 1; RoundPolicy::Floor }
+                Some("ceil") => { self.pos += 1; RoundPolicy::Ceil }
+                _ => RoundPolicy::HalfUp,
+            };
+            Some((dp, policy))
+        } else {
+            None
+        };
         if self.eat_sym("~") {
             if !is_input {
                 return Err(format!(
@@ -563,6 +598,7 @@ impl Parser {
                 // Placeholder; the checker substitutes the median so the
                 // model stays deterministic until `simulate` is invoked.
                 body: Body::Expr(Expr::Num(f64::NAN)),
+                round,
                 dist: Some(DistDecl { kind, params, per_period }),
                 line,
             });
@@ -587,15 +623,28 @@ impl Parser {
                 ));
             }
             let dim = dims[0].clone();
-            let body = Expr::Bin(
-                BinOp::Mul,
-                Box::new(total.clone()),
-                Box::new(Expr::Bin(
-                    BinOp::Div,
-                    Box::new(driver.clone()),
-                    Box::new(Expr::RangeSum { range: dim.clone(), body: Box::new(driver) }),
-                )),
-            );
+            // With `round dp`, the shares are computed in minor units with
+            // the residual distributed by largest remainder — conservation
+            // becomes EXACT at the declared precision. Without it, the
+            // plain proportional split.
+            let body = match round {
+                Some((dp, policy)) => Expr::AllocShare {
+                    total: Box::new(total.clone()),
+                    driver: Box::new(driver),
+                    dim: dim.clone(),
+                    dp,
+                    policy,
+                },
+                None => Expr::Bin(
+                    BinOp::Mul,
+                    Box::new(total.clone()),
+                    Box::new(Expr::Bin(
+                        BinOp::Div,
+                        Box::new(driver.clone()),
+                        Box::new(Expr::RangeSum { range: dim.clone(), body: Box::new(driver) }),
+                    )),
+                ),
+            };
             self.site_buf.clear();
             self.alloc_parts = Some((total, dim));
             return Ok(MeasureDecl {
@@ -604,6 +653,7 @@ impl Parser {
                 ann,
                 over,
                 init,
+                round,
                 body: Body::Expr(body),
                 dist: None,
                 line,
@@ -636,7 +686,7 @@ impl Parser {
         } else {
             self.site_buf.clear();
         }
-        Ok(MeasureDecl { name, is_input, ann, over, init, body, dist: None, line })
+        Ok(MeasureDecl { name, is_input, ann, over, init, round, body, dist: None, line })
     }
 
     /// Input body: `match Dim { Member -> <map or expr> ... [else -> …] }`.

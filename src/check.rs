@@ -178,6 +178,8 @@ pub struct MeasureInfo {
     pub init: Option<Expr>,
     pub body: Body,
     pub dist: Option<Dist>,
+    /// `round dp policy`: stored values snap to dp decimals.
+    pub round: Option<(u32, crate::ast::RoundPolicy)>,
     /// `per period`: fresh draw every period during `simulate` (iid
     /// shocks) instead of one draw per trial (parameter uncertainty).
     pub dist_per_period: bool,
@@ -492,6 +494,7 @@ pub fn check(model: &Model) -> Result<Checked, String> {
                 init: m.init.as_ref().map(|(_, e)| e.clone()),
                 body: m.body.clone(),
                 dist: None, // fitted below (needs the unit checker's helpers)
+                round: m.round,
                 dist_per_period: false,
                 solve,
                 line: m.line,
@@ -675,6 +678,9 @@ pub fn check(model: &Model) -> Result<Checked, String> {
                 } else {
                     t_dep(body, series, index, range_names) // dimension sum
                 }
+            }
+            Expr::AllocShare { total, driver, .. } => {
+                t_dep(total, series, index, range_names) || t_dep(driver, series, index, range_names)
             }
             Expr::Npv { rate, .. } => t_dep(rate, series, index, range_names),
             Expr::Conv { body, rate, .. } => {
@@ -1093,6 +1099,10 @@ pub fn check(model: &Model) -> Result<Checked, String> {
                 }
             }
             Expr::RangeSum { body, .. } => bare_dims(body, measures, index, out),
+            Expr::AllocShare { total, driver, .. } => {
+                bare_dims(total, measures, index, out);
+                bare_dims(driver, measures, index, out);
+            }
             Expr::Npv { rate, body, .. } => {
                 bare_dims(rate, measures, index, out);
                 bare_dims(body, measures, index, out);
@@ -1466,6 +1476,15 @@ pub fn check(model: &Model) -> Result<Checked, String> {
         sites
     };
 
+    // ---- rounding: no snapping inside a fixpoint ---------------------------
+    for m in &measures {
+        if m.round.is_some() && m.solve.is_some() {
+            return Err(format!(
+                "line {}: 'round' on '{}' is not allowed inside a solve block — rounding breaks fixpoint convergence; round a downstream measure instead",
+                m.line, m.name
+            ));
+        }
+    }
     // ---- distributions: per-period + correlate validation ------------------
     for m in &measures {
         if m.dist_per_period && !m.is_series {
@@ -1762,6 +1781,20 @@ impl<'a> Pre<'a> {
                 }
                 Ok(())
             }
+            Expr::AllocShare { total, driver, dim, .. } => {
+                self.walk(total, m, asg, t, out)?;
+                let did = self
+                    .dims
+                    .iter()
+                    .position(|d| d.name == *dim)
+                    .ok_or_else(|| format!("unknown dimension '{dim}'"))?;
+                for c in 0..self.dims[did].members.len() {
+                    let mut a = asg.to_vec();
+                    a[did] = c;
+                    self.walk(driver, m, &a, t, out)?;
+                }
+                Ok(())
+            }
             Expr::Npv { rate, body, range } => {
                 self.walk(rate, m, asg, t, out)?;
                 let r = self.range(range)?.clone();
@@ -2023,6 +2056,23 @@ pub(crate) fn unit_of(e: &Expr, asg: &[usize], env: &UnitEnv) -> Result<Option<U
                 return Ok(acc);
             }
             unit_of(body, asg, env)
+        }
+        Expr::AllocShare { total, driver, dim, .. } => {
+            if let Some(did) = env.dims.iter().position(|d| d.name == *dim) {
+                let mut acc: Option<Unit> = None;
+                for c in 0..env.dims[did].members.len() {
+                    let mut a = asg.to_vec();
+                    a[did] = c;
+                    let u = unit_of(driver, &a, env)?;
+                    acc = join_additive(acc, u).map_err(|_| {
+                        UnitErr::Hard(format!(
+                            "allocate by: driver units differ across {dim} members"
+                        ))
+                    })?;
+                }
+            }
+            // Driver units cancel: the share carries the pot's unit.
+            unit_of(total, asg, env)
         }
         Expr::Npv { rate, body, .. } => {
             let ru = unit_of(rate, asg, env)?;

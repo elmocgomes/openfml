@@ -292,9 +292,26 @@ The scheduler generalizes to the (measure × member × period) micro-graph.
   (`tests/contrib.rs`). Terms compose with everything: the allocation's
   loaded_cost splits into own-spend vs allocated overhead, fy_profit
   into twelve monthly bars.
-- Still ahead: full lossless CST, salsa memoization, LSP, exact decimals
-  (+ exact allocation remainders), read-side information-flow control,
-  real authentication.
+- **Typed rounding + exact allocation remainders** — the cent-level
+  slice of the exact-decimal plan. `round 2 half_up` on any measure
+  snaps stored values to the declared decimals at STORE time (four
+  policies: half_up, half_even, floor, ceil) — downstream readers see
+  posted amounts, grid edits snap, and `round` inside a solve block is
+  a compile error (rounding breaks fixpoint convergence). `allocate …
+  round 2` computes shares in minor units with the residual distributed
+  by **largest remainder** (ties → member order): 100.00 by equal
+  thirds gives 33.34 / 33.33 / 33.33, and the slices re-add to the
+  rounded pot **exactly in integer cents** — tested in cents, through
+  incremental edits, and against the round-trip theorem
+  (`tests/rounding.rs`). The budget model's overhead allocation now
+  carries `round 2`; nudging a headcount produces 51.32 / 177.63 /
+  71.05 — summing to 300.00 to the cent, conservation assert green.
+  What remains for full exact decimals is the representation change
+  (integer minor units end-to-end instead of snapped f64) — an engine
+  concern, not a language one; the syntax and semantics are now fixed.
+- Still ahead: full lossless CST, salsa memoization, LSP, integer
+  minor-unit representation, read-side information-flow control, real
+  authentication.
 
 ## Layout
 
