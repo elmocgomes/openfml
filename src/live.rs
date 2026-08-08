@@ -88,6 +88,12 @@ fn a_target(f: f64, target: f64) -> f64 {
     f + target
 }
 
+/// Plain decimal rendering for source literals (no exponent, tidy tail).
+fn fmt_plain(v: f64) -> String {
+    let r = if v.abs() < 1e12 { (v * 1e10).round() / 1e10 } else { v };
+    format!("{r}")
+}
+
 /// Compact one-line rendering of an expression for term labels.
 fn render_expr(e: &Expr) -> String {
     use crate::ast::BinOp;
@@ -856,10 +862,6 @@ impl Session {
         // The site's CURRENT span, derived from the CST via its token path.
         let span = self.site_span(k);
 
-        fn fmt_plain(v: f64) -> String {
-            let r = if v.abs() < 1e12 { (v * 1e10).round() / 1e10 } else { v };
-            format!("{r}")
-        }
         let rep = match &kind {
             LitKind::Num => fmt_plain(value),
             LitKind::Pct => format!("{}%", fmt_plain(value * 100.0)),
@@ -1035,6 +1037,121 @@ impl Session {
         self.values = saved_values;
         self.dirty = saved_dirty;
         result
+    }
+
+    // ---- structural edits: declaration-level CST operations ------------
+    // These are SOURCE transformations: they return new file texts and the
+    // caller recompiles — structural edits are rare, recompiles are ~ms.
+
+    /// Route a set of non-overlapping flat-source edits into the owning
+    /// files (descending order, so positions stay valid per file).
+    fn apply_flat_edits(&self, mut edits: Vec<(usize, usize, String)>) -> Result<Vec<(String, String)>, String> {
+        edits.sort_by(|a, b| b.0.cmp(&a.0));
+        let mut texts: Vec<(String, String)> =
+            self.files.iter().map(|f| (f.name.clone(), f.text.clone())).collect();
+        for (s, e, rep) in edits {
+            let seg = self
+                .segments
+                .iter()
+                .find(|g| s >= g.flat_start && e <= g.flat_end)
+                .ok_or_else(|| format!("edit at {s}..{e} is not inside a single source file"))?;
+            let local = s - seg.flat_start + seg.local_start;
+            texts[seg.file].1.replace_range(local..local + (e - s), &rep);
+        }
+        Ok(texts)
+    }
+
+    /// Add one period at the end of the calendar: bump the calendar
+    /// declaration's end literal and extend every FULL-RANGE map input
+    /// with a copy of its last entry (sub-range maps like closed actuals
+    /// keep their range). Returns (new file texts, the new period label).
+    pub fn add_period(&self) -> Result<(Vec<(String, String)>, String), String> {
+        use crate::cst::{Red, RedChild, SyntaxKind};
+        let cal = &self.checked.calendar;
+        let new_label = cal.label(cal.len);
+        let mut edits: Vec<(usize, usize, String)> = Vec::new();
+        // The calendar declaration's end literal: non-trivia tokens after `..`.
+        let cal_decl = Red::root(&self.cst)
+            .decls()
+            .into_iter()
+            .find(|d| d.green.kind == SyntaxKind::CalendarDecl)
+            .ok_or("no calendar declaration found")?;
+        let (mut after_dots, mut s0, mut e0) = (false, None, 0usize);
+        for c in cal_decl.children() {
+            if let RedChild::Token { kind, text, offset } = c {
+                let trivia = matches!(kind, SyntaxKind::Whitespace | SyntaxKind::Comment);
+                if after_dots && !trivia {
+                    if s0.is_none() {
+                        s0 = Some(offset);
+                    }
+                    e0 = offset + text.len();
+                }
+                if kind == SyntaxKind::Sym && text == ".." {
+                    after_dots = true;
+                }
+            }
+        }
+        let s0 = s0.ok_or("calendar end literal not found")?;
+        edits.push((s0, e0, new_label.clone()));
+        // Extend each full-range map: insert after the last period's entry.
+        for (k, (m, mb, t, _, kind)) in self.checked.edit_sites.iter().enumerate() {
+            if *t != Some(cal.len - 1) || self.checked.measures[*m].range != (0, cal.len - 1) {
+                continue;
+            }
+            let v = self.values[*m][*mb][cal.len - 1];
+            let lit = match kind {
+                LitKind::Num => fmt_plain(v),
+                LitKind::Pct => format!("{}%", fmt_plain(v * 100.0)),
+                LitKind::Qty(u) => format!("{} {u}", fmt_plain(v)),
+            };
+            let (_, e) = self.site_span(k);
+            edits.push((e, e, format!(", {new_label}: {lit}")));
+        }
+        Ok((self.apply_flat_edits(edits)?, new_label))
+    }
+
+    /// Rename a measure everywhere — token-exact across every file, with
+    /// namespace-collision guards. Comments are deliberately untouched.
+    pub fn rename_measure(&self, old: &str, new: &str) -> Result<Vec<(String, String)>, String> {
+        use crate::cst::{GreenChild, GreenNode, SyntaxKind};
+        if !self.checked.index.contains_key(old) {
+            return Err(format!("unknown measure '{old}'"));
+        }
+        let ok_ident = crate::lexer::lex(new)
+            .ok()
+            .map(|t| t.len() == 1 && matches!(t[0].tok, crate::lexer::Tok::Ident(_)))
+            .unwrap_or(false);
+        if !ok_ident || crate::parser::is_keyword(new) {
+            return Err(format!("'{new}' is not a valid measure name"));
+        }
+        let c = &self.checked;
+        if c.index.contains_key(new)
+            || c.member_lookup.contains_key(new)
+            || c.group_lookup.contains_key(new)
+            || c.dims.iter().any(|d| d.name == new)
+            || c.unit_reg.contains_key(new)
+            || c.range_index.contains_key(new)
+            || c.scenarios.iter().any(|s| s.name == new)
+        {
+            return Err(format!("'{new}' already names something else in this model"));
+        }
+        fn collect(n: &GreenNode, off: usize, old: &str, new: &str, out: &mut Vec<(usize, usize, String)>) {
+            let mut o = off;
+            for ch in &n.children {
+                match ch {
+                    GreenChild::Node(inner) => collect(inner, o, old, new, out),
+                    GreenChild::Token(t) => {
+                        if t.kind == SyntaxKind::Ident && t.text == old {
+                            out.push((o, o + t.text.len(), new.to_string()));
+                        }
+                    }
+                }
+                o += ch.width();
+            }
+        }
+        let mut edits = Vec::new();
+        collect(&self.cst, 0, old, new, &mut edits);
+        self.apply_flat_edits(edits)
     }
 
     /// Map a 1-based line of the flat source to (owning file, local line)

@@ -92,9 +92,10 @@
   #tornado .up { background:var(--ok); left:50%; border-radius:0 5px 5px 0; }
   #tornado .close { float:right; cursor:pointer; opacity:.6; }
   td.torn { cursor: crosshair; }
-  #simBtn { font:inherit; padding:.15rem .55rem; margin-left:.3rem; border:1px solid var(--edge);
+  #simBtn, #addPeriodBtn { font:inherit; padding:.15rem .55rem; margin-left:.3rem; border:1px solid var(--edge);
     background:transparent; border-radius:10px; cursor:pointer; }
   #simBtn.on { border-color:#8a2be2; color:#8a2be2; font-weight:600; }
+  td.mname { cursor:pointer; }
   td .band { display:block; font-size:.72em; opacity:.55; }
 </style>
 </head>
@@ -104,6 +105,7 @@
   <span class="models" id="models"></span>
   <span id="scen"></span>
   <button id="simBtn" title="Monte Carlo over distribution inputs (500 trials)">simulate</button>
+  <button id="addPeriodBtn" title="Extend the calendar by one period (full-range maps copy their last entry)">+ period</button>
   <span id="file">
     <button id="saveBtn" title="Save .fml to disk (Ctrl/Cmd+S)">save</button>
     <span id="draftState"></span>
@@ -256,10 +258,9 @@ function renderScenChips(r) {
     box.appendChild(b);
   }
 }
-// Apply a successful fml_patch result: sync per-file sources + rerender.
-function syncPatchResult(r2, us, what) {
-  stats(r2, us, what);
-  (r2.files || []).forEach((f, i) => {
+// Adopt new per-file sources (from a patch or a structural edit).
+function adoptFiles(files) {
+  (files || []).forEach((f, i) => {
     const key = i === 0 ? mainFile() : f.name;
     if (fileTexts[key] !== f.src) {
       fileTexts[key] = f.src;
@@ -271,6 +272,11 @@ function syncPatchResult(r2, us, what) {
       }
     }
   });
+}
+// Apply a successful fml_patch result: sync per-file sources + rerender.
+function syncPatchResult(r2, us, what) {
+  stats(r2, us, what);
+  adoptFiles(r2.files);
   renderTabs();
   render(r2);
 }
@@ -282,7 +288,8 @@ function render(r) {
     r.periods.map(p => `<th>${p}</th>`).join("") + "</tr></thead><tbody>";
   for (const s of r.series) {
     const cls = s.input ? "inp" : "";
-    html += `<tr class="${cls}"><td title="${s.name}">${s.name}<span class="unit">${s.unit}</span></td>`;
+    const nameData = SERVER ? "" : ` class="mname" data-nkey="${s.key}" data-nmember="${s.member || ""}" data-nt="${s.range[0]}"`;
+    html += `<tr class="${cls}"><td title="${s.name}"${nameData}>${s.name}<span class="unit">${s.unit}</span></td>`;
     s.vals.forEach((v, t) => {
       const inRange = t >= s.range[0] && t <= s.range[1];
       let editable = !inScen && (s.edit === "all" ? inRange : Array.isArray(s.edit) && s.edit.includes(t));
@@ -323,6 +330,12 @@ function render(r) {
   document.querySelectorAll("td.torn").forEach(td => {
     td.addEventListener("click", () => {
       inspect(td.dataset.tkey, td.dataset.tmember || "", Number(td.dataset.tt), false);
+    });
+  });
+  // Row names open the inspector too (inputs included — rename lives there).
+  document.querySelectorAll("td.mname").forEach(td => {
+    td.addEventListener("click", () => {
+      inspect(td.dataset.nkey, td.dataset.nmember || "", Number(td.dataset.nt), false);
     });
   });
   document.querySelectorAll("td input").forEach(inp => {
@@ -546,8 +559,8 @@ function renderInspect() {
     ${ex.note ? `<div class="meta">${ex.note}</div>` : ""}
     ${termRows}
     ${depRows}
-    ${!ex.input && ex.period !== null ? '<button id="tornBtn">tornado ±10%</button> ' : ""}${!ex.input ? '<button id="gsBtn">goal seek…</button>' : ""}
-    <div id="gsForm"></div>`;
+    ${!ex.input && ex.period !== null ? '<button id="tornBtn">tornado ±10%</button> ' : ""}${!ex.input ? '<button id="gsBtn">goal seek…</button> ' : ""}<button id="rnBtn">rename…</button>
+    <div id="gsForm"></div><div id="rnForm"></div>`;
   document.body.appendChild(div);
   div.querySelector(".close").addEventListener("click", () => {
     div.remove();
@@ -617,6 +630,29 @@ function renderInspect() {
       });
     });
   });
+  div.querySelector("#rnBtn").addEventListener("click", () => {
+    const form = div.querySelector("#rnForm");
+    form.innerHTML = `<div class="meta" style="margin-top:.4rem">rename to
+      <input id="rnNew" style="width:10em;font:inherit" value="${ex.name}"> <button id="rnGo">apply everywhere</button>
+      <div id="rnOut" class="meta"></div></div>`;
+    const inp = form.querySelector("#rnNew");
+    inp.focus();
+    inp.select();
+    form.querySelector("#rnGo").addEventListener("click", () => {
+      const next = inp.value.trim();
+      if (!next || next === ex.name) return;
+      writeInput(ex.name + "|" + next);
+      if (exports.fml_rename() !== 0) {
+        form.querySelector("#rnOut").textContent = readResult().error;
+        return;
+      }
+      adoptFiles(readResult().files);
+      document.getElementById("inspect")?.remove();
+      clearHl();
+      inspectStack = [];
+      loadModel(`renamed ${ex.name} → ${next}`);
+    });
+  });
   const tb = div.querySelector("#tornBtn");
   if (tb) tb.addEventListener("click", () => {
     writeInput(ex.member ? ex.name + "|" + ex.member : ex.name);
@@ -683,6 +719,13 @@ srcBox.addEventListener("input", () => {
   }, 350);
 });
 document.getElementById("saveBtn").addEventListener("click", saveToDisk);
+document.getElementById("addPeriodBtn").addEventListener("click", () => {
+  if (SERVER || !loadedOk) return;
+  if (exports.fml_add_period() !== 0) { setErr(readResult().error); return; }
+  const r = readResult();
+  adoptFiles(r.files);
+  loadModel("added " + r.label);
+});
 document.getElementById("simBtn").addEventListener("click", () => {
   if (SERVER) { setErr("simulate runs in local mode"); return; }
   const btn = document.getElementById("simBtn");

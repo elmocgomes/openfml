@@ -642,6 +642,81 @@ pub extern "C" fn fml_explain(period: i32) -> i32 {
     }
 }
 
+fn files_json(files: &[(String, String)]) -> String {
+    let mut out = String::from("\"files\":[");
+    for (k, (name, text)) in files.iter().enumerate() {
+        if k > 0 {
+            out.push(',');
+        }
+        out.push_str(&format!(
+            "{{\"name\":\"{}\",\"src\":\"{}\"}}",
+            json_escape(name),
+            json_escape(text)
+        ));
+    }
+    out.push(']');
+    out
+}
+
+/// Structural edit: add one period at the end of the calendar (extending
+/// full-range maps). Returns new file texts — the host reloads.
+#[no_mangle]
+pub extern "C" fn fml_add_period() -> i32 {
+    let session = unsafe {
+        match SESSION.as_mut() {
+            Some(s) => s,
+            None => {
+                set_result("{\"ok\":false,\"error\":\"no model loaded\"}".into());
+                return 1;
+            }
+        }
+    };
+    match session.add_period() {
+        Ok((files, label)) => {
+            set_result(format!(
+                "{{\"ok\":true,\"label\":\"{}\",{}}}",
+                json_escape(&label),
+                files_json(&files)
+            ));
+            0
+        }
+        Err(e) => {
+            set_result(format!("{{\"ok\":false,\"error\":\"{}\"}}", json_escape(&e)));
+            1
+        }
+    }
+}
+
+/// Structural edit: rename a measure everywhere (input buffer "old|new").
+/// Returns new file texts — the host reloads.
+#[no_mangle]
+pub extern "C" fn fml_rename() -> i32 {
+    let raw = unsafe { String::from_utf8_lossy(&INPUT_BUF).to_string() };
+    let Some((old, new)) = raw.split_once('|') else {
+        set_result("{\"ok\":false,\"error\":\"fml_rename expects old|new\"}".into());
+        return 1;
+    };
+    let session = unsafe {
+        match SESSION.as_mut() {
+            Some(s) => s,
+            None => {
+                set_result("{\"ok\":false,\"error\":\"no model loaded\"}".into());
+                return 1;
+            }
+        }
+    };
+    match session.rename_measure(old, new) {
+        Ok(files) => {
+            set_result(format!("{{\"ok\":true,{}}}", files_json(&files)));
+            0
+        }
+        Err(e) => {
+            set_result(format!("{{\"ok\":false,\"error\":\"{}\"}}", json_escape(&e)));
+            1
+        }
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn fml_recalc() -> i32 {
     let session = unsafe {

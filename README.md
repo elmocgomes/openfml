@@ -372,10 +372,27 @@ The scheduler generalizes to the (measure × member × period) micro-graph.
   replacement, and reprint stability under editing
   (`tests/cst_sites.rs`). (The include segment map remains positional —
   its CST-native replacement is per-file trees, a later slice.)
+- **Structural edits (CST slice 4)** — the first user-visible payoff of
+  the tree: whole-model operations as source transformations that
+  recompile cleanly with formatting preserved. **Add a period**: one
+  click bumps the calendar's end literal and extends every FULL-RANGE
+  map input with a copy of its last entry — across files (each team's
+  map grows in its own file; broadcast literals and sub-range maps like
+  closed actuals are correctly untouched). **Rename a measure**:
+  token-exact rewriting of the declaration and every reference across
+  every file, guarded against collisions with every namespace (measures,
+  members, dimensions, units, ranges, scenarios, keywords); comments are
+  deliberately left alone. Both are Session methods returning new file
+  texts routed through the flat CST + include source map
+  (`tests/edits.rs`); the workbench grew a **+ period** header button,
+  clickable row names (every row, inputs included, now opens the
+  inspector), and a **rename…** form inside it. Verified live on the
+  multi-file budget: 2030 appears in four files at once; renaming
+  marketing_spend rewrites the team file's declaration and the master's
+  formula in 400 µs.
 - Still ahead — the CST arc continues: expression-level granularity,
-  structural edit operations in the workbench (add period column,
-  rename, add member), per-file trees replacing the segment map, then
-  salsa memoization and the LSP. Elsewhere: integer minor-unit
+  add-member-to-dimension, per-file trees replacing the segment map,
+  then salsa memoization and the LSP. Elsewhere: integer minor-unit
   representation, read-side information-flow control, TLS /
   reverse-proxy deployment.
 
