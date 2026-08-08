@@ -94,6 +94,45 @@ fn fmt_plain(v: f64) -> String {
     format!("{r}")
 }
 
+/// Descend as deep as a single node contains [s, e), then return the
+/// covering token range there — a span's position-independent form.
+fn locate_span(
+    n: &crate::cst::GreenNode,
+    base: usize,
+    s: usize,
+    e: usize,
+) -> Option<(Vec<usize>, usize, usize)> {
+    use crate::cst::GreenChild;
+    let mut off = base;
+    for (i, ch) in n.children.iter().enumerate() {
+        let w = ch.width();
+        if s >= off && e <= off + w {
+            if let GreenChild::Node(inner) = ch {
+                let (mut p, f, l) = locate_span(inner, off, s, e)?;
+                p.insert(0, i);
+                return Some((p, f, l));
+            }
+        }
+        off += w;
+    }
+    let mut off2 = base;
+    let (mut first, mut last) = (None, None);
+    for (i, ch) in n.children.iter().enumerate() {
+        let w = ch.width();
+        if off2 < e && s < off2 + w {
+            if matches!(ch, GreenChild::Node(_)) {
+                return None; // crosses a subnode boundary — malformed
+            }
+            if first.is_none() {
+                first = Some(i);
+            }
+            last = Some(i);
+        }
+        off2 += w;
+    }
+    Some((Vec::new(), first?, last?))
+}
+
 /// Compact one-line rendering of an expression for term labels.
 fn render_expr(e: &Expr) -> String {
     use crate::ast::BinOp;
@@ -155,10 +194,17 @@ pub struct Session {
     /// The model source — kept current by `patch_input` (grid → text
     /// write-back via byte-exact span patching).
     src: String,
-    /// The underlying files (files[0] = main) and the source map from flat
-    /// spans back to them — patches are routed to the owning file too.
+    /// The underlying files (files[0] = main). Each file's text is the
+    /// reprint of its OWN lossless CST — patches edit trees, not bytes.
     files: Vec<crate::SourceFile>,
-    segments: Vec<crate::Segment>,
+    file_trees: Vec<std::rc::Rc<crate::cst::GreenNode>>,
+    /// Per edit site: the owning file plus the literal's tree path there
+    /// (None = the region is included more than once → not editable).
+    file_site_paths: Vec<Option<(usize, Vec<usize>, usize, usize)>>,
+    /// Whether the flat source is an include-expansion of the files (vs a
+    /// single file verbatim). The segment map is DERIVED on demand by
+    /// re-expanding — never stored, never shifted.
+    expanded: bool,
     /// The lossless CST of the flat source. Edit-site spans are DERIVED
     /// from it via `site_paths` — token paths never shift, so the old
     /// span-shifting arithmetic is gone.
@@ -210,48 +256,14 @@ impl Session {
     }
 
     /// Locate every edit site's literal in the CST as a tree path — the
-    /// position-independent form of a span: descend as deep as a single
-    /// node contains the span, then take the covering token range there.
+    /// position-independent form of a span.
     fn build_site_paths(
         cst: &crate::cst::GreenNode,
         sites: &[(usize, usize, Option<usize>, (usize, usize), LitKind)],
     ) -> Result<Vec<(Vec<usize>, usize, usize)>, String> {
-        use crate::cst::{GreenChild, GreenNode};
-        fn locate(n: &GreenNode, base: usize, s: usize, e: usize) -> Option<(Vec<usize>, usize, usize)> {
-            // Descend into a single child node containing the whole span.
-            let mut off = base;
-            for (i, ch) in n.children.iter().enumerate() {
-                let w = ch.width();
-                if s >= off && e <= off + w {
-                    if let GreenChild::Node(inner) = ch {
-                        let (mut p, f, l) = locate(inner, off, s, e)?;
-                        p.insert(0, i);
-                        return Some((p, f, l));
-                    }
-                }
-                off += w;
-            }
-            // The span covers a run of THIS node's token children.
-            let mut off2 = base;
-            let (mut first, mut last) = (None, None);
-            for (i, ch) in n.children.iter().enumerate() {
-                let w = ch.width();
-                if off2 < e && s < off2 + w {
-                    if matches!(ch, GreenChild::Node(_)) {
-                        return None; // crosses a subnode boundary — malformed
-                    }
-                    if first.is_none() {
-                        first = Some(i);
-                    }
-                    last = Some(i);
-                }
-                off2 += w;
-            }
-            Some((Vec::new(), first?, last?))
-        }
         let mut out = Vec::with_capacity(sites.len());
         for (_, _, _, (s, e), _) in sites {
-            match locate(cst, 0, *s, *e) {
+            match locate_span(cst, 0, *s, *e) {
                 Some(p) => out.push(p),
                 None => return Err(format!("edit site at bytes {s}..{e} not locatable in the CST")),
             }
@@ -267,6 +279,42 @@ impl Session {
     ) -> Result<Session, String> {
         let cst = crate::cst::parse_cst(&src)?;
         let site_paths = Session::build_site_paths(&cst, &checked.edit_sites)?;
+        // Each file gets its own lossless tree (fragments parse via the
+        // resilient path); its reprint must equal the file text exactly.
+        let mut file_trees = Vec::with_capacity(files.len());
+        for f in &files {
+            let t = crate::cst::parse_cst(&f.text)?;
+            if t.text() != f.text {
+                return Err(format!("internal: file tree of \"{}\" is not lossless", f.name));
+            }
+            file_trees.push(t);
+        }
+        // Route every edit site into its owning file's tree, once, using
+        // the construction-time segment map (derived data — not stored).
+        let mut file_site_paths = Vec::with_capacity(checked.edit_sites.len());
+        for (_, _, _, (s0, e0), _) in &checked.edit_sites {
+            let seg = segments
+                .iter()
+                .find(|g| *s0 >= g.flat_start && *e0 <= g.flat_end)
+                .ok_or("edit site is not inside a single source file")?;
+            let (ls, le) = (s0 - seg.flat_start + seg.local_start, e0 - seg.flat_start + seg.local_start);
+            // A region included more than once cannot be tree-edited in
+            // lockstep — mark the site non-editable.
+            let multi = segments.iter().any(|g| {
+                g.file == seg.file
+                    && (g.flat_start, g.flat_end) != (seg.flat_start, seg.flat_end)
+                    && g.local_start < le
+                    && ls < g.local_start + (g.flat_end - g.flat_start)
+            });
+            if multi {
+                file_site_paths.push(None);
+            } else {
+                let p = locate_span(&file_trees[seg.file], 0, ls, le)
+                    .ok_or("edit site not locatable in its file tree")?;
+                file_site_paths.push(Some((seg.file, p.0, p.1, p.2)));
+            }
+        }
+        let expanded = files.len() > 1 || src != files[0].text;
         let mut values = eval::new_values(&checked);
         eval::init_inputs(&checked, &mut values)?;
         let tols = eval::compute_tols(&checked, &mut values)?;
@@ -286,7 +334,9 @@ impl Session {
             values,
             src,
             files,
-            segments,
+            file_trees,
+            file_site_paths,
+            expanded,
             cst,
             site_paths,
             tols,
@@ -294,6 +344,33 @@ impl Session {
             preds,
             dirty: HashSet::new(),
         })
+    }
+
+    /// The segment map, DERIVED on demand: identity for single-file
+    /// sessions, otherwise a re-expansion of the current file texts —
+    /// which must reproduce the flat source exactly (the lockstep
+    /// invariant of tree-based editing).
+    fn compute_segments(&self) -> Result<Vec<crate::Segment>, String> {
+        if !self.expanded {
+            return Ok(vec![crate::Segment {
+                flat_start: 0,
+                flat_end: self.src.len(),
+                file: 0,
+                local_start: 0,
+            }]);
+        }
+        let files = self.files.clone();
+        let exp = crate::expand_includes_with_map(&files[0].name, &files[0].text, &mut |p| {
+            files
+                .iter()
+                .find(|f| f.name == p)
+                .map(|f| f.text.clone())
+                .ok_or_else(|| format!("missing include \"{p}\""))
+        })?;
+        if exp.flat != self.src {
+            return Err("internal: file texts no longer expand to the flat source".into());
+        }
+        Ok(exp.segments)
     }
 
     /// The CURRENT byte span of an edit site, derived from the CST — never
@@ -881,60 +958,30 @@ impl Session {
             LitKind::Pct => format!("{}%", fmt_plain(value * 100.0)),
             LitKind::Qty(u) => format!("{} {u}", fmt_plain(value)),
         };
-        let old_len = span.1 - span.0;
-        // Route the patch to the owning source file (span provenance): find
-        // the segment containing the span and splice the same bytes there.
-        let seg = self
-            .segments
-            .iter()
-            .position(|s| span.0 >= s.flat_start && span.1 <= s.flat_end)
-            .ok_or_else(|| "edit span is not traceable to a source file".to_string())?;
-        let (owner, local) = {
-            let s = &self.segments[seg];
-            (s.file, span.0 - s.flat_start + s.local_start)
+        let _ = span;
+        // Both the flat source and the owning file are TREES: replace the
+        // literal's tokens 1:1 in each (same token count by construction —
+        // Num→Num, Pct→Pct, Qty→Num·Ws·Ident) and reprint. No byte
+        // splicing, no positional state to maintain.
+        let Some((owner, fpath, ffirst, flast)) = self.file_site_paths[k].clone() else {
+            return Err(format!(
+                "this region is included more than once — not grid-editable"
+            ));
         };
-        // A file region expanded more than once (same file included twice)
-        // would need multi-site flat patching — refuse rather than desync.
-        for (si, s) in self.segments.iter().enumerate() {
-            if si == seg || s.file != owner {
-                continue;
-            }
-            let hi = s.local_start + (s.flat_end - s.flat_start);
-            if s.local_start < local + old_len && local < hi {
-                return Err(format!(
-                    "\"{}\" is included more than once — not grid-editable",
-                    self.files[owner].name
-                ));
-            }
-        }
-        self.files[owner].text.replace_range(local..local + old_len, &rep);
-        // The flat source is the CST's reprint: replace the literal's
-        // tokens 1:1 with the re-lexed replacement (same token count by
-        // construction — Num→Num, Pct→Pct, Qty→Num·Ws·Ident), so every
-        // site path everywhere stays valid. No span shifting exists.
         let reps = crate::cst::lex_green_tokens(&rep)?;
         let (path, first, last) = self.site_paths[k].clone();
-        if reps.len() != last - first + 1 {
+        if reps.len() != last - first + 1 || reps.len() != flast - ffirst + 1 {
             return Err(format!(
                 "internal: replacement '{rep}' lexes to {} tokens over a {}-token site",
                 reps.len(),
                 last - first + 1
             ));
         }
-        self.cst = crate::cst::replace_tokens_at(&self.cst, &path, first, last, reps)?;
+        self.cst = crate::cst::replace_tokens_at(&self.cst, &path, first, last, reps.clone())?;
         self.src = self.cst.text();
-        let delta = rep.len() as isize - old_len as isize;
-        for (si, s) in self.segments.iter_mut().enumerate() {
-            if si == seg {
-                s.flat_end = (s.flat_end as isize + delta) as usize;
-            } else if s.flat_start >= span.1 {
-                s.flat_start = (s.flat_start as isize + delta) as usize;
-                s.flat_end = (s.flat_end as isize + delta) as usize;
-            }
-            if s.file == owner && si != seg && s.local_start >= local + old_len {
-                s.local_start = (s.local_start as isize + delta) as usize;
-            }
-        }
+        self.file_trees[owner] =
+            crate::cst::replace_tokens_at(&self.file_trees[owner], &fpath, ffirst, flast, reps)?;
+        self.files[owner].text = self.file_trees[owner].text();
         // Runtime: broadcast sites change every period the literal defines.
         self.set_input(name, member, site_t, value)
     }
@@ -1061,11 +1108,11 @@ impl Session {
     /// files (descending order, so positions stay valid per file).
     fn apply_flat_edits(&self, mut edits: Vec<(usize, usize, String)>) -> Result<Vec<(String, String)>, String> {
         edits.sort_by(|a, b| b.0.cmp(&a.0));
+        let segments = self.compute_segments()?;
         let mut texts: Vec<(String, String)> =
             self.files.iter().map(|f| (f.name.clone(), f.text.clone())).collect();
         for (s, e, rep) in edits {
-            let seg = self
-                .segments
+            let seg = segments
                 .iter()
                 .find(|g| s >= g.flat_start && e <= g.flat_end)
                 .ok_or_else(|| format!("edit at {s}..{e} is not inside a single source file"))?;
@@ -1341,7 +1388,10 @@ impl Session {
             }
             off += l.len();
         }
-        for s in &self.segments {
+        let Ok(segments) = self.compute_segments() else {
+            return (self.files[0].name.clone(), line);
+        };
+        for s in &segments {
             if off >= s.flat_start && off < s.flat_end {
                 let local = s.local_start + (off - s.flat_start);
                 let lline = self.files[s.file].text[..local].matches('\n').count() + 1;

@@ -419,10 +419,23 @@ The scheduler generalizes to the (measure × member × period) micro-graph.
   replacing exactly the Body node's bytes (trailing trivia preserved),
   routed to the owning file in multi-file models
   (`tests/expr_nodes.rs`).
-- Still ahead — the CST arc continues: per-file trees replacing the
-  segment map, then salsa memoization and the LSP. Elsewhere: integer
-  minor-unit representation, read-side information-flow control, TLS /
-  reverse-proxy deployment.
+- **Per-file trees (slice 6)** — the last positional arithmetic is
+  gone. Every file now carries its OWN lossless CST (fragments parse via
+  the resilient path, verified lossless at session build), and every
+  edit site carries a second tree path into its owning file's tree. A
+  grid patch replaces the literal's tokens in BOTH trees and both texts
+  become reprints — no byte splicing anywhere, no segment offsets to
+  shift. The segment map stopped being stored state: it is **derived on
+  demand by re-expanding the current file texts**, guarded by the
+  lockstep invariant `expand(file texts) == flat source` (tested after
+  every patch of a six-edit cross-file sequence). Structural edits and
+  `locate_line` route through fresh segments, so they stay correct even
+  after length-changing patches have moved everything
+  (`tests/file_trees.rs`). Regions included more than once are detected
+  at session build and marked non-editable, not discovered mid-patch.
+- Still ahead — salsa-style memoization over subtree identity, then the
+  LSP. Elsewhere: integer minor-unit representation, read-side
+  information-flow control, TLS / reverse-proxy deployment.
 
 ## Layout
 
