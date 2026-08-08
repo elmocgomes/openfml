@@ -499,6 +499,20 @@ The scheduler generalizes to the (measure × member × period) micro-graph.
   arrow/Tab/Enter/Escape keys and caret-anchored positioning. The same
   candidates now serve `textDocument/completion` in fml-lsp, covered by
   the protocol test.
+- **UI focus pass (slice 11)** — the workbench reorganized around what a
+  modeler actually checks. **Model health first**: the asserts moved
+  from footer fine-print to header pills — green at a glance, a failing
+  covenant throbs red the moment an edit breaks it. **A scannable
+  grid**: negative numbers in red (finance eyes find the problem row
+  instantly), input rows tinted, row hover highlighting across wide
+  grids, a shadow edge on the sticky name column. **A calm header**:
+  the model list became a dropdown, actions grouped behind a divider,
+  and a **code / split / grid** view toggle plus a draggable pane
+  divider (both persisted) — grid-only for review meetings, code-only
+  for authoring. **Orientation**: an amber banner announces scenario
+  view ("viewing scenario Squeeze — cells colored vs Base") with a
+  one-click return; the window title names the model; a quiet footer
+  hint teaches the click affordances; Escape closes any panel.
 - Still ahead — per-declaration unit-inference/scheduling queries, LSP
   rename riding the existing machinery. Elsewhere: integer minor-unit
   representation, read-side information-flow control, TLS /

@@ -10,18 +10,39 @@
   * { box-sizing: border-box; }
   body { font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
          margin: 0; height: 100vh; display: flex; flex-direction: column; }
-  header { display:flex; align-items:center; gap:1rem; padding:.5rem 1rem;
-           border-bottom:1px solid var(--edge); }
-  header h1 { font-size:1rem; margin:0; } header h1 span { opacity:.5; font-weight:400; }
-  header .models button { font:inherit; padding:.2rem .6rem; margin-left:.35rem;
-    border:1px solid var(--edge); background:transparent; border-radius:5px; cursor:pointer; }
-  header .models button.on { border-color: var(--accent); color: var(--accent); }
-  #scen { margin-left:.5rem; }
+  header { display:flex; align-items:center; gap:.7rem; padding:.45rem 1rem;
+           border-bottom:1px solid var(--edge); flex-wrap:wrap; row-gap:.3rem; }
+  header h1 { font-size:1rem; margin:0; letter-spacing:.5px; }
+  #modelSel { font:inherit; padding:.2rem .4rem; border:1px solid var(--edge);
+    background:transparent; color:inherit; border-radius:6px; max-width:11em; }
+  header .actions { display:flex; gap:.35rem; align-items:center; padding-left:.5rem;
+    border-left:1px solid var(--edge); }
+  header .views { margin-left:auto; display:flex; }
+  header .views button { font:inherit; font-size:.8em; padding:.15rem .5rem; cursor:pointer;
+    border:1px solid var(--edge); background:transparent; opacity:.6; }
+  header .views button:first-child { border-radius:6px 0 0 6px; }
+  header .views button:last-child { border-radius:0 6px 6px 0; }
+  header .views button.on { opacity:1; border-color:var(--accent); color:var(--accent); }
+  #asserts { display:flex; gap:.35rem; }
+  #asserts .pass, #asserts .fail { padding:.12rem .55rem; border-radius:10px; font-size:.82em; }
+  #asserts .pass { background: rgba(42,157,58,.12); border:1px solid rgba(42,157,58,.4); }
+  #asserts .fail { background: rgba(221,51,51,.15); border:1px solid rgba(221,51,51,.55);
+    font-weight:700; animation: throb 1.2s ease-in-out infinite; }
+  @keyframes throb { 50% { background: rgba(221,51,51,.3); } }
+  #scenBanner { padding:.3rem 1rem; background: rgba(184,134,11,.12); color:#b8860b;
+    border-bottom:1px solid var(--edge); font-weight:600; display:flex; gap:1rem; align-items:center; }
+  #scenBanner button { font:inherit; font-size:.85em; border:1px solid currentColor; color:inherit;
+    background:transparent; border-radius:5px; padding:.05rem .5rem; cursor:pointer; }
+  #split { cursor: col-resize; background: transparent; position:relative; }
+  #split::after { content:""; position:absolute; inset:0 2px; background: var(--edge); }
+  #split:hover::after { background: var(--accent); }
+  #hint { opacity:.4; font-size:.85em; }
+  #scen { margin-left:0; }
   #scen button { font:inherit; padding:.15rem .55rem; margin-left:.3rem; border:1px solid var(--edge);
     background:transparent; border-radius:10px; cursor:pointer; opacity:.85; }
   #scen button.on { border-color:#b8860b; color:#b8860b; font-weight:600; }
-  #file button { font:inherit; padding:.15rem .55rem; border:1px solid var(--edge);
-    background:transparent; border-radius:5px; cursor:pointer; }
+  header .actions button { font:inherit; padding:.15rem .55rem; border:1px solid var(--edge);
+    background:transparent; border-radius:10px; cursor:pointer; }
   #ftabs { display:flex; gap:.3rem; padding:.35rem .75rem 0; flex-wrap:wrap; }
   #ftabs button { font:inherit; font-size:.85em; padding:.12rem .5rem; border:1px solid var(--edge);
     border-bottom:0; background:transparent; border-radius:6px 6px 0 0; cursor:pointer; opacity:.7; }
@@ -30,7 +51,11 @@
   #draftState button { border:none; text-decoration:underline; padding:0; margin-left:.3rem; }
   td.dup { background: rgba(42,157,58,.18); } td.ddown { background: rgba(221,51,51,.14); }
   #stats { margin-left:auto; opacity:.85; } #stats b { color: var(--ok); }
-  main { flex:1; display:grid; grid-template-columns: minmax(320px, 34%) 1fr; min-height:0; }
+  main { flex:1; display:grid; grid-template-columns: minmax(280px, 34%) 6px 1fr; min-height:0; }
+  body.view-code main { grid-template-columns: 1fr 0 0 !important; }
+  body.view-code #right, body.view-code #split { display:none; }
+  body.view-grid main { grid-template-columns: 0 0 1fr !important; }
+  body.view-grid #left, body.view-grid #split { display:none; }
   #left { display:flex; flex-direction:column; border-right:1px solid var(--edge); min-height:0; }
   #edwrap { flex:1; display:flex; min-height:0; position:relative; }
   #gutter { padding:.75rem .5rem .75rem .6rem; text-align:right; opacity:.35; user-select:none;
@@ -72,16 +97,23 @@
   thead th { position: sticky; top: 0; background: Canvas; z-index: 2; }
   th:first-child, td:first-child { text-align:left; position:sticky; left:0;
     background: Canvas; z-index:1; max-width: 220px; overflow:hidden; text-overflow:ellipsis; }
+  tbody tr:hover td { background: rgba(128,128,128,.07); }
+  tbody tr:hover td:first-child { background: Canvas; box-shadow: inset 0 0 0 999px rgba(128,128,128,.07); }
+  td.neg { color: #c0392b; }
+  tr.inp td { background: rgba(42,125,209,.035); }
+  td:first-child { box-shadow: 2px 0 4px -2px rgba(0,0,0,.15); }
   td.chg { background: rgba(255,200,0,.3); }
   td.out { opacity:.35; }
   td input { font:inherit; width: 7.5em; text-align:right; border:0; border-bottom:1px dashed var(--accent);
              background: rgba(42,125,209,.07); color:inherit; outline:none; padding:0; }
   tr.inp td:first-child { color: var(--accent); }
   .unit { opacity:.5; font-size:.85em; margin-left:.4em; }
-  #foot { display:flex; gap:1.5rem; padding:.45rem 1rem; border-top:1px solid var(--edge);
+  #foot { display:flex; gap:1.5rem; padding:.4rem 1rem; border-top:1px solid var(--edge);
           flex-wrap:wrap; align-items:baseline; }
   .pass::before { content:"✓ "; color:var(--ok); } .fail::before { content:"✗ "; color:var(--bad); }
-  #scalars span { margin-right:1.2rem; opacity:.9; }
+  #scalars span { margin-right:1rem; opacity:.9; padding:.1rem .45rem; border:1px solid var(--edge);
+    border-radius:8px; }
+  #scalars span:hover { border-color: var(--accent); }
   #tornado { position:fixed; right:1rem; bottom:3rem; background:Canvas; border:1px solid var(--edge);
     border-radius:8px; padding:.6rem .9rem; box-shadow:0 4px 18px rgba(0,0,0,.25); max-width:420px; z-index:6; }
   #inspect { position:fixed; right:1rem; bottom:3rem; background:Canvas; border:1px solid var(--edge);
@@ -117,8 +149,6 @@
   #tornado .up { background:var(--ok); left:50%; border-radius:0 5px 5px 0; }
   #tornado .close { float:right; cursor:pointer; opacity:.6; }
   td.torn { cursor: crosshair; }
-  #simBtn, #addPeriodBtn { font:inherit; padding:.15rem .55rem; margin-left:.3rem; border:1px solid var(--edge);
-    background:transparent; border-radius:10px; cursor:pointer; }
   #simBtn.on { border-color:#8a2be2; color:#8a2be2; font-weight:600; }
   td.mname { cursor:pointer; }
   td .band { display:block; font-size:.72em; opacity:.55; }
@@ -126,19 +156,23 @@
 </head>
 <body>
 <header>
-  <h1>fml <span>workbench — text ⇄ grid, one live model</span></h1>
-  <span class="models" id="models"></span>
+  <h1>fml</h1>
+  <select id="modelSel" title="Model"></select>
   <span id="scen"></span>
-  <button id="simBtn" title="Monte Carlo over distribution inputs (500 trials)">simulate</button>
-  <button id="addPeriodBtn" title="Extend the calendar by one period (full-range maps copy their last entry)">+ period</button>
-  <button id="addMemberBtn" title="Add a member to a dimension (arms inserted into every match)" style="display:none">+ member</button>
-  <span id="amForm" style="display:none"></span>
-  <span id="file">
+  <span class="actions">
+    <button id="simBtn" title="Monte Carlo over distribution inputs (500 trials)">simulate</button>
+    <button id="addPeriodBtn" title="Extend the calendar by one period (full-range maps copy their last entry)">+ period</button>
+    <button id="addMemberBtn" title="Add a member to a dimension (arms inserted into every match)" style="display:none">+ member</button>
+    <span id="amForm" style="display:none"></span>
     <button id="saveBtn" title="Save .fml to disk (Ctrl/Cmd+S)">save</button>
     <span id="draftState"></span>
   </span>
-  <span id="stats">loading…</span>
+  <span class="views" id="views" title="Layout">
+    <button data-v="code">code</button><button data-v="split" class="on">split</button><button data-v="grid">grid</button>
+  </span>
+  <span id="asserts" title="Model checks — every assert, every period"></span>
 </header>
+<div id="scenBanner" style="display:none"></div>
 <main>
   <div id="left">
     <div id="ftabs" style="display:none"></div>
@@ -152,9 +186,14 @@
     </div>
     <div id="err"></div>
   </div>
+  <div id="split" title="Drag to resize"></div>
   <div id="right"><table id="tbl"></table></div>
 </main>
-<div id="foot"><span id="asserts"></span><span><span class="lbl">scalars:</span><span id="scalars"></span></span></div>
+<div id="foot">
+  <span><span class="lbl">scalars</span><span id="scalars"></span></span>
+  <span id="hint">click a cell to explain · click a name to inspect/rename · Ctrl+Space completes</span>
+  <span id="stats">loading…</span>
+</div>
 <script type="module">
 const MODELS = ["rolling", "budget", "team_budget", "finplan", "solar_pf", "fx_consol"];
 const enc = new TextEncoder(), dec = new TextDecoder();
@@ -319,6 +358,17 @@ function syncPatchResult(r2, us, what) {
 }
 function render(r) {
   lastState = r;
+  const banner = document.getElementById("scenBanner");
+  const scen = r.active && r.active !== "Base" ? r.active : null;
+  banner.style.display = scen ? "flex" : "none";
+  if (scen) {
+    banner.innerHTML = `viewing scenario <b>${scen}</b> — cells colored vs Base (hover for Base values)
+      <button id="backBase">back to Base</button>`;
+    banner.querySelector("#backBase").addEventListener("click", () => {
+      writeInput("Base");
+      if (exports.fml_scenario() === 0) render(readResult());
+    });
+  }
   const amb = document.getElementById("addMemberBtn");
   if (amb) amb.style.display = !SERVER && r.dims && r.dims.length ? "" : "none";
   renderScenChips(r);
@@ -341,17 +391,17 @@ function render(r) {
         const differs = b !== null && v !== null && Math.abs(v - b) > 1e-9;
         const dir = differs ? (v > b ? "dup" : "ddown") : "";
         const tip = differs ? ` title="Base: ${fmt(b)}"` : "";
-        html += `<td class="${dir}${inRange ? "" : " out"}"${tip}>${fmt(v)}</td>`;
+        html += `<td class="${dir}${inRange ? "" : " out"}${v !== null && v < 0 ? " neg" : ""}"${tip}>${fmt(v)}</td>`;
       } else if (simBands && simBands[s.name] && inRange && !s.input) {
         const [b10, b50, b90] = simBands[s.name][t] || [null, null, null];
         const band = (b10 !== null && Math.abs(b90 - b10) > 1e-9)
           ? `<span class="band">${fmt(b10)} … ${fmt(b90)}</span>` : "";
-        html += `<td title="p10 ${fmt(b10)} · p50 ${fmt(b50)} · p90 ${fmt(b90)}">${fmt(b50)}${band}</td>`;
+        html += `<td class="${b50 !== null && b50 < 0 ? "neg" : ""}" title="p10 ${fmt(b10)} · p50 ${fmt(b50)} · p90 ${fmt(b90)}">${fmt(b50)}${band}</td>`;
       } else {
         const changed = prev[s.name] && prev[s.name][t] !== v;
         const torn = !SERVER && !inScen && inRange && !s.input ? " torn" : "";
         const tdata = torn ? ` data-tkey="${s.key}" data-tmember="${s.member || ""}" data-tt="${t}" title="click: explain this number"` : "";
-        html += `<td class="${changed ? "chg" : ""}${inRange ? "" : " out"}${torn}"${tdata}>${fmt(v)}</td>`;
+        html += `<td class="${changed ? "chg" : ""}${inRange ? "" : " out"}${torn}${v !== null && v < 0 ? " neg" : ""}"${tdata}>${fmt(v)}</td>`;
       }
     });
     prev[s.name] = s.vals;
@@ -600,8 +650,8 @@ if (SERVER) {
   // ---- connected client: server evaluates, we project ----
   document.querySelector("header h1 span").textContent =
     `— connected to ${SERVER} as ${USER}`;
-  document.getElementById("models").style.display = "none";
-  document.getElementById("file").style.display = "none";
+  document.getElementById("modelSel").style.display = "none";
+  document.querySelector("header .actions").style.display = "none";
   const box = document.getElementById("src");
   box.readOnly = true;
   const g = await (await fetch(SERVER + "/grants")).json();
@@ -873,8 +923,8 @@ exports = instance.exports;
 const srcBox = document.getElementById("src");
 async function switchModel(name) {
   current = name;
-  document.querySelectorAll("#models button").forEach(b =>
-    b.classList.toggle("on", b.textContent === name));
+  document.getElementById("modelSel").value = name;
+  document.title = `fml · ${name}`;
   fileTexts = {};
   diskTexts = {};
   activeFile = mainFile();
@@ -886,13 +936,13 @@ async function switchModel(name) {
   renderHl();
   await loadModel(draft !== null ? "draft restored" : "compile+run");
 }
-const mbox = document.getElementById("models");
+const msel = document.getElementById("modelSel");
 for (const m of MODELS) {
-  const b = document.createElement("button");
-  b.textContent = m;
-  b.addEventListener("click", () => switchModel(m));
-  mbox.appendChild(b);
+  const o = document.createElement("option");
+  o.value = o.textContent = m;
+  msel.appendChild(o);
 }
+msel.addEventListener("change", () => switchModel(msel.value));
 
 // live text editing: debounced full recompile
 let timer = null;
@@ -975,6 +1025,37 @@ window.addEventListener("keydown", e => {
     e.preventDefault();
     saveToDisk();
   }
+  if (e.key === "Escape") {
+    document.getElementById("inspect")?.remove();
+    document.getElementById("tornado")?.remove();
+    clearHl();
+    inspectStack = [];
+    hideComp();
+  }
+});
+// ---- layout: code / split / grid views + draggable divider ----
+function setView(v) {
+  document.body.classList.remove("view-code", "view-grid");
+  if (v !== "split") document.body.classList.add("view-" + v);
+  document.querySelectorAll("#views button").forEach(b => b.classList.toggle("on", b.dataset.v === v));
+  localStorage.setItem("fml:view", v);
+}
+document.querySelectorAll("#views button").forEach(b =>
+  b.addEventListener("click", () => setView(b.dataset.v)));
+setView(localStorage.getItem("fml:view") || "split");
+const mainEl = document.querySelector("main");
+const savedSplit = localStorage.getItem("fml:splitpx");
+if (savedSplit) mainEl.style.gridTemplateColumns = `${savedSplit}px 6px 1fr`;
+document.getElementById("split").addEventListener("mousedown", e => {
+  e.preventDefault();
+  const move = ev => {
+    const px = Math.max(240, Math.min(ev.clientX, window.innerWidth - 320));
+    mainEl.style.gridTemplateColumns = `${px}px 6px 1fr`;
+    localStorage.setItem("fml:splitpx", px);
+  };
+  const up = () => { window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up); };
+  window.addEventListener("mousemove", move);
+  window.addEventListener("mouseup", up);
 });
 
 await switchModel("finplan");
