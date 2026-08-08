@@ -153,6 +153,14 @@ pub struct Session {
     /// spans back to them — patches are routed to the owning file too.
     files: Vec<crate::SourceFile>,
     segments: Vec<crate::Segment>,
+    /// The lossless CST of the flat source. Edit-site spans are DERIVED
+    /// from it via `site_paths` — token paths never shift, so the old
+    /// span-shifting arithmetic is gone.
+    cst: std::rc::Rc<crate::cst::GreenNode>,
+    /// Per edit site: (root child index of the owning declaration, first
+    /// and last token-child indices of the literal). Replacements re-lex
+    /// to the same token count, so paths stay valid across edits.
+    site_paths: Vec<(usize, usize, usize)>,
     tols: Vec<f64>,
     iterations: Vec<(String, Vec<u32>)>,
     /// Predecessors of each micro-node (inverted edges).
@@ -194,12 +202,54 @@ impl Session {
         Session::from_checked(checked, src, files, segments)
     }
 
+    /// Locate every edit site's literal in the CST as a (decl, first
+    /// token, last token) path — the position-independent form of a span.
+    fn build_site_paths(
+        cst: &crate::cst::GreenNode,
+        sites: &[(usize, usize, Option<usize>, (usize, usize), LitKind)],
+    ) -> Result<Vec<(usize, usize, usize)>, String> {
+        let mut out = Vec::with_capacity(sites.len());
+        for (_, _, _, (s, e), _) in sites {
+            let mut off = 0usize;
+            let mut found = None;
+            for (ci, child) in cst.children.iter().enumerate() {
+                let w = child.width();
+                if let crate::cst::GreenChild::Node(n) = child {
+                    if *s >= off && *e <= off + w {
+                        // Token-child indices covering [s, e).
+                        let (mut toff, mut first, mut last) = (off, None, None);
+                        for (ti, tc) in n.children.iter().enumerate() {
+                            let tw = tc.width();
+                            if toff < *e && *s < toff + tw {
+                                if first.is_none() {
+                                    first = Some(ti);
+                                }
+                                last = Some(ti);
+                            }
+                            toff += tw;
+                        }
+                        found = Some((ci, first, last));
+                        break;
+                    }
+                }
+                off += w;
+            }
+            match found {
+                Some((ci, Some(f), Some(l))) => out.push((ci, f, l)),
+                _ => return Err(format!("edit site at bytes {s}..{e} not locatable in the CST")),
+            }
+        }
+        Ok(out)
+    }
+
     fn from_checked(
         checked: Checked,
         src: String,
         files: Vec<crate::SourceFile>,
         segments: Vec<crate::Segment>,
     ) -> Result<Session, String> {
+        let cst = crate::cst::parse_cst(&src)?;
+        let site_paths = Session::build_site_paths(&cst, &checked.edit_sites)?;
         let mut values = eval::new_values(&checked);
         eval::init_inputs(&checked, &mut values)?;
         let tols = eval::compute_tols(&checked, &mut values)?;
@@ -220,11 +270,36 @@ impl Session {
             src,
             files,
             segments,
+            cst,
+            site_paths,
             tols,
             iterations,
             preds,
             dirty: HashSet::new(),
         })
+    }
+
+    /// The CURRENT byte span of an edit site, derived from the CST — never
+    /// stored, never shifted.
+    fn site_span(&self, k: usize) -> (usize, usize) {
+        let (decl, first, last) = self.site_paths[k];
+        let mut off = 0usize;
+        for child in self.cst.children.iter().take(decl) {
+            off += child.width();
+        }
+        let node = match &self.cst.children[decl] {
+            crate::cst::GreenChild::Node(n) => n,
+            crate::cst::GreenChild::Token(_) => unreachable!("site paths point at decl nodes"),
+        };
+        let mut s = off;
+        for tc in node.children.iter().take(first) {
+            s += tc.width();
+        }
+        let mut e = s;
+        for tc in node.children.iter().take(last + 1).skip(first) {
+            e += tc.width();
+        }
+        (s, e)
     }
 
     /// Full evaluation of every step (also resets incremental state).
@@ -777,7 +852,9 @@ impl Session {
         let k = chosen.ok_or_else(|| {
             format!("'{name}' is not literal-editable at this position (formula-defined input)")
         })?;
-        let (_, _, site_t, span, kind) = self.checked.edit_sites[k].clone();
+        let (_, _, site_t, _, kind) = self.checked.edit_sites[k].clone();
+        // The site's CURRENT span, derived from the CST via its token path.
+        let span = self.site_span(k);
 
         fn fmt_plain(v: f64) -> String {
             let r = if v.abs() < 1e12 { (v * 1e10).round() / 1e10 } else { v };
@@ -815,18 +892,22 @@ impl Session {
             }
         }
         self.files[owner].text.replace_range(local..local + old_len, &rep);
-        self.src.replace_range(span.0..span.1, &rep);
-        let delta = rep.len() as isize - old_len as isize;
-        for (_, _, _, sp, _) in self.checked.edit_sites.iter_mut() {
-            if sp.0 > span.1 || (sp.0 == span.0 && sp.1 == span.1) {
-                if sp.0 == span.0 {
-                    sp.1 = (sp.1 as isize + delta) as usize;
-                } else {
-                    sp.0 = (sp.0 as isize + delta) as usize;
-                    sp.1 = (sp.1 as isize + delta) as usize;
-                }
-            }
+        // The flat source is the CST's reprint: replace the literal's
+        // tokens 1:1 with the re-lexed replacement (same token count by
+        // construction — Num→Num, Pct→Pct, Qty→Num·Ws·Ident), so every
+        // site path everywhere stays valid. No span shifting exists.
+        let reps = crate::cst::lex_green_tokens(&rep)?;
+        let (decl, first, last) = self.site_paths[k];
+        if reps.len() != last - first + 1 {
+            return Err(format!(
+                "internal: replacement '{rep}' lexes to {} tokens over a {}-token site",
+                reps.len(),
+                last - first + 1
+            ));
         }
+        self.cst = crate::cst::replace_tokens(&self.cst, decl, first, last, reps)?;
+        self.src = self.cst.text();
+        let delta = rep.len() as isize - old_len as isize;
         for (si, s) in self.segments.iter_mut().enumerate() {
             if si == seg {
                 s.flat_end = (s.flat_end as isize + delta) as usize;

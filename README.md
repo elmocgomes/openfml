@@ -358,12 +358,26 @@ The scheduler generalizes to the (measure × member × period) micro-graph.
   undimmed grid of everything that survives, instead of freezing the
   whole model (`tests/resilient.rs`). Strict mode is untouched: the
   compiler still stops at the first error.
-- Still ahead — the CST arc continues: edit-sites derived from the CST
-  (retiring the hand-rolled span shifting), expression-level
-  granularity, structural edit operations in the workbench (add period
-  column, rename, add member), then salsa memoization and the LSP.
-  Elsewhere: integer minor-unit representation, read-side
-  information-flow control, TLS / reverse-proxy deployment.
+- **Edit sites from the CST (slice 3)** — the hand-rolled span-shifting
+  arithmetic is gone. Each edit site is now a **token path** (owning
+  declaration, token range) located once at session build; byte spans
+  are DERIVED from the red tree whenever needed, never stored, never
+  shifted. Replacements re-lex to the same token count by construction
+  (`Num→Num`, `22%→Pct`, `12 USD→Num·Ws·Ident`), so every path stays
+  valid across any edit sequence; a grid edit rebuilds one declaration
+  node plus the root spine, and the session source IS the tree's
+  reprint. All fourteen round-trip/byte-exactness theorems in the suite
+  now run through this path unchanged, plus new ones: six
+  length-changing patches hammering one map literal, Qty three-token
+  replacement, and reprint stability under editing
+  (`tests/cst_sites.rs`). (The include segment map remains positional —
+  its CST-native replacement is per-file trees, a later slice.)
+- Still ahead — the CST arc continues: expression-level granularity,
+  structural edit operations in the workbench (add period column,
+  rename, add member), per-file trees replacing the segment map, then
+  salsa memoization and the LSP. Elsewhere: integer minor-unit
+  representation, read-side information-flow control, TLS /
+  reverse-proxy deployment.
 
 ## Layout
 

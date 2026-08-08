@@ -238,6 +238,36 @@ impl<'a> Red<'a> {
     }
 }
 
+/// Lex a replacement fragment into green tokens (raw byte slices).
+pub fn lex_green_tokens(text: &str) -> Result<Vec<GreenToken>, String> {
+    Ok(lex_full(text)?
+        .into_iter()
+        .map(|st| GreenToken { kind: tok_kind(&st.tok), text: text[st.start..st.end].to_string() })
+        .collect())
+}
+
+/// Replace token children `first..=last` of root child `decl` with `reps`,
+/// rebuilding only the decl node and the root spine — every other
+/// declaration is shared by reference.
+pub fn replace_tokens(
+    root: &Rc<GreenNode>,
+    decl: usize,
+    first: usize,
+    last: usize,
+    reps: Vec<GreenToken>,
+) -> Result<Rc<GreenNode>, String> {
+    let GreenChild::Node(old) = &root.children[decl] else {
+        return Err("replace_tokens: root child is not a declaration node".into());
+    };
+    let mut ch = old.children.clone();
+    if last >= ch.len() || first > last {
+        return Err("replace_tokens: token range out of bounds".into());
+    }
+    ch.splice(first..=last, reps.into_iter().map(GreenChild::Token));
+    let new_decl = GreenNode::new(old.kind, ch);
+    Ok(root.with_child_replaced(decl, GreenChild::Node(new_decl)))
+}
+
 // ---- the builder ---------------------------------------------------------
 
 /// Parse a source file into its lossless CST. The tree reprints to the
