@@ -264,9 +264,25 @@ The scheduler generalizes to the (measure × member × period) micro-graph.
   for distribution inputs. Footer scalars are now clickable, so
   "fy_profit = 350?" is: click, type 350, pick growth, solve (7 evals,
   ~600 µs), apply.
-- Still ahead: full lossless CST, salsa memoization, LSP, exact decimals,
-  read-side information-flow control, real authentication, allocate
-  primitive, quantified provenance shares (semiring weights).
+- **The `allocate` primitive** — the workhorse of every budgeting
+  system: `allocate overhead_share : kEUR flow over CostCenter, plan =
+  overhead by headcount` spreads a total across a dimension's members in
+  proportion to a driver. Desugars (like `eliminate`) to the
+  proportional split `total * driver / sum[Dim](driver)` **plus an
+  auto-generated conservation tie-assert** (`allocate_overhead_share`)
+  proving the pieces re-add to the pot every period. A dimensionless
+  driver (`by 1`) gives an equal split; a zero driver-sum is a runtime
+  error naming the allocation, not a silent NaN; time-varying drivers
+  reshape the split period by period; and `explain` shows the full
+  allocation basis for free — the pot, the member's own driver, and
+  every member's driver via the sum (`tests/allocate.rs`). The budget
+  model now carries overhead-by-headcount into per-member
+  `loaded_cost`. The float-honest tie-assert tolerance (1e-6) is a
+  placeholder for the exact-decimal phase, where conservation becomes
+  exact with a remainder-goes-to-largest rounding discipline.
+- Still ahead: full lossless CST, salsa memoization, LSP, exact decimals
+  (+ exact allocation remainders), read-side information-flow control,
+  real authentication, quantified provenance shares (semiring weights).
 
 ## Layout
 

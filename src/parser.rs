@@ -17,13 +17,18 @@ pub struct Parser {
     cur_member: Option<String>,
     calendar_name: Option<String>,
     edit_sites: Vec<EditSite>,
+    dim_names: Vec<String>,
+    /// Set while parsing an `allocate` declaration: the body is
+    /// `<total> by <driver>`, desugared to a proportional split.
+    alloc_mode: bool,
+    alloc_parts: Option<(Expr, String)>,
 }
 
 const DIMLESS_ALIASES: [&str; 2] = ["rate", "ratio"];
-const KEYWORDS: [&str; 31] = [
+const KEYWORDS: [&str; 33] = [
     "model", "calendar", "currency", "unit", "input", "solve", "assert", "period",
     "over", "init", "tolerance", "max_iterations", "prev", "relax", "when", "match", "in",
-    "dimension", "functional", "at", "eliminate", "against", "scenario", "from", "actuals", "until", "metalog", "uniform", "normal", "correlate", "per",
+    "dimension", "functional", "at", "eliminate", "against", "scenario", "from", "actuals", "until", "metalog", "uniform", "normal", "correlate", "per", "allocate", "by",
 ];
 
 fn lit_kind(e: &Expr) -> Option<LitKind> {
@@ -48,6 +53,9 @@ impl Parser {
             cur_member: None,
             calendar_name: None,
             edit_sites: Vec::new(),
+            dim_names: Vec::new(),
+            alloc_mode: false,
+            alloc_parts: None,
         };
         p.model()
     }
@@ -275,6 +283,7 @@ impl Parser {
                     if let Some(g) = &group {
                         self.dim_members.push(g.clone());
                     }
+                    self.dim_names.push(dname.clone());
                     model.dimensions.push(DimensionDecl { name: dname, group, members });
                 }
                 Some("functional") => {
@@ -358,6 +367,27 @@ impl Parser {
                     // Scenario-override literals are not grid edit sites.
                     self.site_buf.clear();
                     model.scenarios.push(ScenarioDecl { name, from, overrides, line });
+                }
+                Some("allocate") => {
+                    self.pos += 1;
+                    self.alloc_mode = true;
+                    let m = self.measure(false);
+                    self.alloc_mode = false;
+                    let m = m?;
+                    let (total, dim) = self.alloc_parts.take().expect("allocate sets parts");
+                    // Conservation by construction, proven by a tie-assert:
+                    // the allocated pieces must re-add to the total.
+                    let over_cal = m.over.iter().find(|o| **o != dim).cloned();
+                    model.items.push(Item::Measure(m.clone()));
+                    model.items.push(Item::Assert(AssertDecl {
+                        name: format!("allocate_{}", m.name),
+                        over: over_cal,
+                        lhs: Expr::RangeSum { range: dim, body: Box::new(Expr::Ref(m.name.clone())) },
+                        op: CmpOp::Eq,
+                        rhs: total,
+                        tol: Some(Expr::Num(1e-6)),
+                        line: m.line,
+                    }));
                 }
                 Some("correlate") => {
                     let line = self.line();
@@ -534,6 +564,48 @@ impl Parser {
                 // model stays deterministic until `simulate` is invoked.
                 body: Body::Expr(Expr::Num(f64::NAN)),
                 dist: Some(DistDecl { kind, params, per_period }),
+                line,
+            });
+        }
+        if self.alloc_mode {
+            // `allocate x : u over Dim, cal = <total> by <driver>` desugars
+            // to the proportional split total * driver / sum[Dim](driver).
+            self.expect_sym("=")?;
+            let total = self.expr()?;
+            if !self.eat_kw("by") {
+                return Err(format!(
+                    "line {}: allocate needs '= <total> by <driver>'",
+                    self.line()
+                ));
+            }
+            let driver = self.expr()?;
+            let dims: Vec<&String> = over.iter().filter(|o| self.dim_names.contains(o)).collect();
+            if dims.len() != 1 {
+                return Err(format!(
+                    "line {line}: allocate '{name}' must range over exactly one dimension (found {})",
+                    dims.len()
+                ));
+            }
+            let dim = dims[0].clone();
+            let body = Expr::Bin(
+                BinOp::Mul,
+                Box::new(total.clone()),
+                Box::new(Expr::Bin(
+                    BinOp::Div,
+                    Box::new(driver.clone()),
+                    Box::new(Expr::RangeSum { range: dim.clone(), body: Box::new(driver) }),
+                )),
+            );
+            self.site_buf.clear();
+            self.alloc_parts = Some((total, dim));
+            return Ok(MeasureDecl {
+                name,
+                is_input: false,
+                ann,
+                over,
+                init,
+                body: Body::Expr(body),
+                dist: None,
                 line,
             });
         }
