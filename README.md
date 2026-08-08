@@ -309,9 +309,24 @@ The scheduler generalizes to the (measure × member × period) micro-graph.
   What remains for full exact decimals is the representation change
   (integer minor units end-to-end instead of snapped f64) — an engine
   concern, not a language one; the syntax and semantics are now fixed.
+- **Authentication + the tamper-evident log** — the server's v2 trust
+  model. Zero-dependency SHA-256/HMAC-SHA256 (`src/crypto.rs`, pinned to
+  the FIPS/RFC 4231 test vectors); identity is a bearer token
+  `user.<hmac(secret)>` minted with `fml-server token alice` — a claimed
+  "user" field is ignored, and MAC comparison is constant-time. The
+  event log is now a **hash chain**: each event is signed over the
+  previous signature, so a retroactive edit, deletion, or reorder of
+  history makes replay fail with "signature mismatch — refusing to
+  serve" naming the first bad event (tail truncation loses commits but
+  cannot forge them). The gate remains ONE line: verify token → ACL →
+  apply → sign → append. Client mode connects with `?token=…`
+  (`tests/auth.rs`; demonstrated live: 401 without/with forged token,
+  403 across ACL, signed commits, and a boot refusal on a
+  retroactively edited log).
 - Still ahead: full lossless CST, salsa memoization, LSP, integer
-  minor-unit representation, read-side information-flow control, real
-  authentication.
+  minor-unit representation, read-side information-flow control, TLS /
+  reverse-proxy deployment (the token is a bearer credential — put the
+  server behind HTTPS).
 
 ## Layout
 

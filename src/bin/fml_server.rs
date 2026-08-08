@@ -12,7 +12,7 @@
 //! State is event-sourced: on boot the model file is loaded and the log
 //! replayed; the log line is written only after a successful apply.
 
-use fml::server::{apply_event, replay, Acl, Event};
+use fml::server::{apply_event, make_token, replay_signed, sign_line, verify_token, Acl, Event, GENESIS};
 use fml::Session;
 use std::io::{Read, Write};
 use std::net::TcpListener;
@@ -123,6 +123,7 @@ fn respond(stream: &mut std::net::TcpStream, code: u16, body: &str) {
     let status = match code {
         200 => "200 OK",
         400 => "400 Bad Request",
+        401 => "401 Unauthorized",
         403 => "403 Forbidden",
         404 => "404 Not Found",
         _ => "500 Internal Server Error",
@@ -136,11 +137,22 @@ fn respond(stream: &mut std::net::TcpStream, code: u16, body: &str) {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    if args.len() != 5 {
-        eprintln!("usage: fml-server <model.fml> <owners.cfg> <events.log> <port>");
+    // `fml-server token <user> [secret-file]` — mint a bearer token.
+    if args.len() >= 3 && args[1] == "token" {
+        let path = args.get(3).map(String::as_str).unwrap_or("server.secret");
+        let secret = fml::crypto::load_or_create_secret(std::path::Path::new(path)).expect("secret");
+        println!("{}", make_token(&secret, &args[2]));
+        return;
+    }
+    if args.len() != 5 && args.len() != 6 {
+        eprintln!("usage: fml-server <model.fml> <owners.cfg> <events.log> <port> [secret-file]");
+        eprintln!("       fml-server token <user> [secret-file]");
         std::process::exit(2);
     }
     let (model_path, acl_path, log_path, port) = (&args[1], &args[2], &args[3], &args[4]);
+    let secret_path = args.get(5).map(String::as_str).unwrap_or("server.secret");
+    let secret =
+        fml::crypto::load_or_create_secret(std::path::Path::new(secret_path)).expect("server secret");
 
     let raw = std::fs::read_to_string(model_path).expect("read model");
     let base = std::path::Path::new(model_path).parent().map(|p| p.to_path_buf()).unwrap_or_default();
@@ -153,14 +165,21 @@ fn main() {
     let mut session = Session::new(&src).expect("compile model");
     session.run_full().expect("evaluate model");
     let mut next_seq = 1u64;
+    let mut chain_tip = GENESIS.to_string();
     if let Ok(log) = std::fs::read_to_string(log_path) {
-        let last = replay(&mut session, &log).expect("replay event log");
+        // Verify-then-apply: a log that fails its hash chain has been
+        // modified after the fact — refuse to serve from it.
+        let (last, tip) = replay_signed(&mut session, &log, &secret).expect("replay signed event log");
         next_seq = last + 1;
-        eprintln!("replayed {} events", last);
+        chain_tip = tip;
+        eprintln!("replayed {} events (chain verified)", last);
     }
 
     let listener = TcpListener::bind(format!("127.0.0.1:{port}")).expect("bind");
-    eprintln!("fml-server on 127.0.0.1:{port} — model {model_path}, {} users", acl.users.len());
+    eprintln!(
+        "fml-server on 127.0.0.1:{port} — model {model_path}, {} users, tokens via 'fml-server token <user>'",
+        acl.users.len()
+    );
 
     for stream in listener.incoming() {
         let Ok(mut stream) = stream else { continue };
@@ -259,8 +278,18 @@ fn main() {
                     }
                 };
                 let get = |k: &str| fields.iter().find(|(f, _)| f == k).map(|(_, v)| v.clone());
-                let (Some(user), Some(name), Some(value)) = (get("user"), get("name"), get("value")) else {
-                    respond(&mut stream, 400, "{\"ok\":false,\"error\":\"need user, name, value\"}");
+                // Identity comes ONLY from a verified token — a claimed
+                // "user" field is ignored.
+                let Some(token) = get("token") else {
+                    respond(&mut stream, 401, "{\"ok\":false,\"error\":\"missing token — get one with 'fml-server token <user>'\"}");
+                    continue;
+                };
+                let Some(user) = verify_token(&secret, &token) else {
+                    respond(&mut stream, 401, "{\"ok\":false,\"error\":\"invalid token\"}");
+                    continue;
+                };
+                let (Some(name), Some(value)) = (get("name"), get("value")) else {
+                    respond(&mut stream, 400, "{\"ok\":false,\"error\":\"need name, value\"}");
                     continue;
                 };
                 let member = get("member").filter(|m| m != "null" && !m.is_empty());
@@ -287,12 +316,15 @@ fn main() {
                 match apply_event(&mut session, &ev) {
                     Ok(()) => {
                         use std::io::Write as _;
+                        let line = ev.to_line();
+                        let sig = sign_line(&secret, &chain_tip, &line);
                         let mut f = std::fs::OpenOptions::new()
                             .create(true)
                             .append(true)
                             .open(log_path)
                             .expect("open log");
-                        writeln!(f, "{}", ev.to_line()).expect("append log");
+                        writeln!(f, "{line}\t{sig}").expect("append log");
+                        chain_tip = sig;
                         next_seq += 1;
                         respond(&mut stream, 200, &format!("{{\"ok\":true,\"seq\":{}}}", ev.seq));
                     }

@@ -124,10 +124,12 @@ const enc = new TextEncoder(), dec = new TextDecoder();
 let exports, prev = {}, current = "finplan", loadedOk = false, lastState = null;
 let baseVals = {}, activeScen = "Base";
 let simBands = null;   // name -> bands (per-slot [p10,p50,p90]) when sim mode on
-// ---- client mode: ?server=http://localhost:5199&user=alice ----
+// ---- client mode: ?server=http://localhost:5199&token=alice.<hmac> ----
+// (mint tokens with:  fml-server token alice)
 const PARAMS = new URLSearchParams(location.search);
 const SERVER = PARAMS.get("server");
-const USER = PARAMS.get("user") || "anon";
+const TOKEN = PARAMS.get("token") || "";
+const USER = TOKEN ? TOKEN.split(".")[0] : (PARAMS.get("user") || "anon");
 let myGrants = [];
 function authorized(measure, member) {
   return myGrants.some(g =>
@@ -329,7 +331,7 @@ function render(r) {
       if (SERVER) {
         const t0 = performance.now();
         fetch(SERVER + "/patch", { method: "POST", body: JSON.stringify({
-          user: USER, name: inp.dataset.key, member: inp.dataset.member || "",
+          token: TOKEN, name: inp.dataset.key, member: inp.dataset.member || "",
           period: inp.dataset.t, value: String(v) }) })
           .then(r => r.json())
           .then(async r => {

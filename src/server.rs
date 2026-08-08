@@ -3,10 +3,41 @@
 //! thin HTTP shell over these; every mutation passes through ONE gate —
 //! `authorize` then `apply_event` — identically for humans and machines.
 //!
-//! v1 trust model: identity is a claimed user name (demo-grade; real
-//! authentication is a deployment concern layered in front).
+//! Trust model (v2): identity is a bearer token `user.<hmac>` minted from
+//! the server secret — "alice" is cryptography, not a claim. The event
+//! log is a hash chain: each event is signed over the previous signature,
+//! so any edit, deletion or reorder of history breaks replay.
 
+use crate::crypto::{ct_eq, hex, hmac_sha256};
 use crate::live::Session;
+
+/// Mint a bearer token for `user`: `user.<hmac(secret, "tok:user")>`.
+pub fn make_token(secret: &[u8], user: &str) -> String {
+    format!("{user}.{}", hex(&hmac_sha256(secret, format!("tok:{user}").as_bytes())))
+}
+
+/// Verify a token and return the authenticated user (constant-time MAC
+/// comparison). None = forged, malformed, or wrong secret.
+pub fn verify_token(secret: &[u8], token: &str) -> Option<String> {
+    let (user, mac) = token.split_once('.')?;
+    if user.is_empty() {
+        return None;
+    }
+    let want = hex(&hmac_sha256(secret, format!("tok:{user}").as_bytes()));
+    if ct_eq(mac.as_bytes(), want.as_bytes()) {
+        Some(user.to_string())
+    } else {
+        None
+    }
+}
+
+/// The chain tag of the empty log.
+pub const GENESIS: &str = "genesis";
+
+/// Signature for an event line given the previous link of the chain.
+pub fn sign_line(secret: &[u8], prev_sig: &str, line: &str) -> String {
+    hex(&hmac_sha256(secret, format!("{prev_sig}\n{line}").as_bytes()))
+}
 
 /// One grant: a measure, optionally narrowed to a dimension member.
 /// `measure == "*"` grants everything.
@@ -134,6 +165,41 @@ pub fn apply_event(session: &mut Session, ev: &Event) -> Result<(), String> {
     session.patch_input(&ev.name, ev.member.as_deref(), ev.period, ev.value)?;
     session.recalc()?;
     Ok(())
+}
+
+/// Replay a SIGNED log, verifying the hash chain link by link. Returns
+/// (last seq, chain tip). A signature mismatch means the log has been
+/// modified after the fact — the server must refuse to serve from it.
+/// (Tail truncation alone is not detectable by the chain; it loses the
+/// newest commits but cannot forge or reorder history.)
+pub fn replay_signed(session: &mut Session, log: &str, secret: &[u8]) -> Result<(u64, String), String> {
+    let mut prev = GENESIS.to_string();
+    let mut last = 0;
+    for line in log.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if line.matches('\t').count() != 6 {
+            return Err(
+                "event log has unsigned lines — it predates authentication; archive it and start a fresh log"
+                    .into(),
+            );
+        }
+        let (evpart, sig) = line.rsplit_once('\t').expect("7 fields checked");
+        let want = sign_line(secret, &prev, evpart);
+        if !ct_eq(sig.as_bytes(), want.as_bytes()) {
+            let seq = evpart.split('\t').next().unwrap_or("?");
+            return Err(format!(
+                "event {seq}: signature mismatch — the log has been modified (or the secret changed); refusing to serve"
+            ));
+        }
+        let ev = Event::from_line(evpart)?;
+        apply_event(session, &ev).map_err(|e| format!("replaying event {}: {e}", ev.seq))?;
+        last = ev.seq;
+        prev = sig.to_string();
+    }
+    Ok((last, prev))
 }
 
 /// Replay a log (e.g. on boot) in order. Fails loudly on a corrupt line —

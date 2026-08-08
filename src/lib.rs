@@ -7,6 +7,7 @@
 pub mod ast;
 pub mod calendar;
 pub mod check;
+pub mod crypto;
 pub mod eval;
 pub mod lexer;
 pub mod live;
