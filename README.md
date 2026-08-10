@@ -533,10 +533,19 @@ The scheduler generalizes to the (measure × member × period) micro-graph.
   **process banner** (dept · role · round status), a model picker of
   what YOU may read, a submit button for editors, reopen/lock controls
   for admins — and cells freeze the moment your department submits.
-- Still ahead — per-declaration unit-inference/scheduling queries, LSP
-  rename riding the existing machinery. Elsewhere: integer minor-unit
-  representation, read-side information-flow control, TLS /
-  reverse-proxy deployment.
+- **LSP rename + references (slice 13)** — the last editor verbs.
+  `textDocument/references` lists every occurrence of a measure across
+  every file (declaration and uses, includes included);
+  `prepareRename` returns the exact token range; `rename` rides
+  `rename_measure` — all its namespace-collision guards intact — and
+  returns a **WorkspaceEdit spanning the owning files**, so renaming
+  `spend` from the master file rewrites `team.fml`'s declaration in the
+  same editor transaction. Renaming to a keyword answers with a proper
+  JSON-RPC error ("'round' is not a valid measure name"). Covered by
+  the end-to-end protocol test (`tests/lsp.rs`).
+- Still ahead — per-declaration unit-inference/scheduling queries,
+  integer minor-unit representation, read-side information-flow
+  control, TLS / reverse-proxy deployment.
 
 ## Layout
 

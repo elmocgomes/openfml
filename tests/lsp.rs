@@ -193,6 +193,50 @@ include \"team.fml\"\ntotal : EUR flow over plan = spend * 2\n";
     assert!(spend.get("detail").and_then(J::as_str).unwrap().contains("EUR"));
     assert!(items.iter().any(|i| i.get("label").and_then(J::as_str) == Some("allocate")), "keywords complete");
 
+    // references → every occurrence of `spend`, across BOTH files
+    let id = lsp.request("textDocument/references", pos_params(&uri, 4.0, col + 1.0));
+    let refs = lsp.response(id, &mut diags);
+    let refs = refs.as_arr().unwrap();
+    assert_eq!(refs.len(), 2, "declaration + use: {refs:?}");
+    assert!(refs.iter().any(|l| l.get("uri").and_then(J::as_str).unwrap().ends_with("team.fml")));
+    assert!(refs.iter().any(|l| l.get("uri").and_then(J::as_str).unwrap().ends_with("plan.fml")));
+
+    // prepareRename → the exact token range under the cursor
+    let id = lsp.request("textDocument/prepareRename", pos_params(&uri, 4.0, col + 1.0));
+    let prep = lsp.response(id, &mut diags);
+    assert_eq!(prep.path("start.character").and_then(J::as_f64), Some(col));
+    assert_eq!(prep.path("end.character").and_then(J::as_f64), Some(col + 5.0));
+
+    // rename spend → outlay: a WorkspaceEdit touching both files
+    let mut params = pos_params(&uri, 4.0, col + 1.0);
+    if let J::O(fields) = &mut params {
+        fields.push(("newName".into(), J::s("outlay")));
+    }
+    let id = lsp.request("textDocument/rename", params.clone());
+    let edit = lsp.response(id, &mut diags);
+    let changes = edit.get("changes").unwrap();
+    let J::O(files_changed) = changes else { panic!("changes object") };
+    assert_eq!(files_changed.len(), 2, "{files_changed:?}");
+    let main_edit = files_changed.iter().find(|(u, _)| u.ends_with("plan.fml")).unwrap();
+    let new_main = main_edit.1.as_arr().unwrap()[0].get("newText").and_then(J::as_str).unwrap();
+    assert!(new_main.contains("= outlay * 2"), "{new_main}");
+    let inc_edit = files_changed.iter().find(|(u, _)| u.ends_with("team.fml")).unwrap();
+    assert!(inc_edit.1.as_arr().unwrap()[0].get("newText").and_then(J::as_str).unwrap().contains("input outlay"));
+
+    // rename to a keyword → a proper JSON-RPC error
+    let mut bad = pos_params(&uri, 4.0, col + 1.0);
+    if let J::O(fields) = &mut bad {
+        fields.push(("newName".into(), J::s("round")));
+    }
+    let bad_id = lsp.request("textDocument/rename", bad);
+    let err = loop {
+        let m = lsp.read_msg();
+        if m.get("id").and_then(J::as_f64) == Some(bad_id) {
+            break m.get("error").cloned().expect("error object");
+        }
+    };
+    assert!(err.get("message").and_then(J::as_str).unwrap().contains("not a valid measure name"));
+
     // break the model → error diagnostic + dropped-dependent warning
     let broken = main_text.replace("= spend * 2", "= spend * * 2");
     lsp.notify(

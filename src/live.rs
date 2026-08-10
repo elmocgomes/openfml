@@ -1911,6 +1911,22 @@ impl Session {
         Some(md)
     }
 
+    /// Every occurrence of an identifier across all file trees:
+    /// (file name, byte offset in that file, token length).
+    pub fn ident_occurrences(&self, name: &str) -> Vec<(String, usize, usize)> {
+        let mut out = Vec::new();
+        for (fi, tree) in self.file_trees.iter().enumerate() {
+            let mut toks = Vec::new();
+            tree.flat_tokens(0, &mut toks);
+            for (kind, text, off) in toks {
+                if kind == crate::cst::SyntaxKind::Ident && text == name {
+                    out.push((self.files[fi].name.clone(), off, text.len()));
+                }
+            }
+        }
+        out
+    }
+
     /// Where a measure is declared: (owning file name, 1-based local line).
     pub fn definition_of(&self, name: &str) -> Option<(String, usize)> {
         let &m = self.checked.index.get(name)?;

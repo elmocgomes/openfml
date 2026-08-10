@@ -37,6 +37,8 @@ fn main() {
                     ("definitionProvider", J::B(true)),
                     ("documentSymbolProvider", J::B(true)),
                     ("completionProvider", J::obj(vec![("triggerCharacters", J::A(vec![]))])),
+                    ("referencesProvider", J::B(true)),
+                    ("renameProvider", J::obj(vec![("prepareProvider", J::B(true))])),
                 ]);
                 respond(id, J::obj(vec![
                     ("capabilities", caps),
@@ -128,6 +130,79 @@ fn main() {
                     }
                 }
                 respond(id, J::A(items));
+            }
+            "textDocument/references" => {
+                let uri = msg.path("params.textDocument.uri").and_then(J::as_str).unwrap_or("").to_string();
+                let r = with_doc_pos(&docs, &msg, |_doc, s, off| {
+                    let name = s.measure_at(0, off)?;
+                    let main = s.files()[0].name.clone();
+                    let mut locs = Vec::new();
+                    for (file, foff, len) in s.ident_occurrences(&name) {
+                        let text = &s.files().iter().find(|f| f.name == file)?.text;
+                        let (l0, c0) = offset_to_pos(text, foff);
+                        let (l1, c1) = offset_to_pos(text, foff + len);
+                        let target = if file == main { uri.clone() } else { sibling_uri(&uri, &file) };
+                        locs.push(J::obj(vec![
+                            ("uri", J::S(target)),
+                            ("range", range_json(l0, c0, l1, c1)),
+                        ]));
+                    }
+                    Some(J::A(locs))
+                });
+                respond(id, r.unwrap_or(J::A(vec![])));
+            }
+            "textDocument/prepareRename" => {
+                let r = with_doc_pos(&docs, &msg, |doc, s, off| {
+                    let name = s.measure_at(0, off)?;
+                    // The exact token range under the cursor, in this doc.
+                    let main = s.files()[0].name.clone();
+                    for (file, foff, len) in s.ident_occurrences(&name) {
+                        if file == main && off >= foff && off < foff + len {
+                            let (l0, c0) = offset_to_pos(&doc.text, foff);
+                            let (l1, c1) = offset_to_pos(&doc.text, foff + len);
+                            return Some(range_json(l0, c0, l1, c1));
+                        }
+                    }
+                    None
+                });
+                respond(id, r.unwrap_or(J::Null));
+            }
+            "textDocument/rename" => {
+                let uri = msg.path("params.textDocument.uri").and_then(J::as_str).unwrap_or("").to_string();
+                let new_name = msg.path("params.newName").and_then(J::as_str).unwrap_or("").to_string();
+                let outcome = (|| -> Result<J, String> {
+                    let doc = docs.get(&uri).ok_or("document not open")?;
+                    let s = doc.session.as_ref().ok_or("model does not compile")?;
+                    let line = msg.path("params.position.line").and_then(J::as_f64).ok_or("position")? as u32;
+                    let ch = msg.path("params.position.character").and_then(J::as_f64).ok_or("position")? as u32;
+                    let off = pos_to_offset(&doc.text, line, ch);
+                    let old = s.measure_at(0, off).ok_or("not a measure name")?;
+                    let files = s.rename_measure(&old, &new_name)?;
+                    // WorkspaceEdit: whole-document replacements per file
+                    // (the editor applies them to buffers; didChange follows).
+                    let main = s.files()[0].name.clone();
+                    let mut changes = Vec::new();
+                    for (fname, new_text) in &files {
+                        let old_text = &s.files().iter().find(|f| &f.name == fname).ok_or("file")?.text;
+                        if old_text == new_text {
+                            continue;
+                        }
+                        let (el, ec) = offset_to_pos(old_text, old_text.len());
+                        let target = if *fname == main { uri.clone() } else { sibling_uri(&uri, fname) };
+                        changes.push((
+                            target,
+                            J::A(vec![J::obj(vec![
+                                ("range", range_json(0, 0, el, ec)),
+                                ("newText", J::S(new_text.clone())),
+                            ])]),
+                        ));
+                    }
+                    Ok(J::obj(vec![("changes", J::O(changes))]))
+                })();
+                match outcome {
+                    Ok(edit) => respond(id, edit),
+                    Err(e) => respond_err(id, &e),
+                }
             }
             "textDocument/documentSymbol" => {
                 let uri = msg.path("params.textDocument.uri").and_then(J::as_str).unwrap_or("");
@@ -235,6 +310,37 @@ where
 }
 
 // ---- positions (LSP lines/UTF-16 characters ↔ byte offsets) ------------
+
+fn range_json(l0: u32, c0: u32, l1: u32, c1: u32) -> J {
+    J::obj(vec![
+        ("start", J::obj(vec![("line", J::n(l0 as f64)), ("character", J::n(c0 as f64))])),
+        ("end", J::obj(vec![("line", J::n(l1 as f64)), ("character", J::n(c1 as f64))])),
+    ])
+}
+
+fn offset_to_pos(text: &str, off: usize) -> (u32, u32) {
+    let mut line = 0u32;
+    let mut ls = 0usize;
+    for (i, b) in text.bytes().enumerate() {
+        if i >= off {
+            break;
+        }
+        if b == b'\n' {
+            line += 1;
+            ls = i + 1;
+        }
+    }
+    let ch: u32 = text[ls..off.min(text.len())].chars().map(|c| c.len_utf16() as u32).sum();
+    (line, ch)
+}
+
+fn respond_err(id: Option<J>, msg: &str) {
+    send(J::obj(vec![
+        ("jsonrpc", J::s("2.0")),
+        ("id", id.unwrap_or(J::Null)),
+        ("error", J::obj(vec![("code", J::n(-32602.0)), ("message", J::s(msg))])),
+    ]));
+}
 
 fn pos_to_offset(text: &str, line: u32, ch: u32) -> usize {
     let mut cur = 0usize;
