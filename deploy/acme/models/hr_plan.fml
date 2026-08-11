@@ -1,0 +1,4 @@
+// HR — headcount and salary. Owned by human resources.
+input direct_hc : hc flow over q = { 2026-Q1: 255, 2026-Q2: 260, 2026-Q3: 262, 2026-Q4: 265 }
+input indirect_hc : hc flow over q = { 2026-Q1: 88, 2026-Q2: 90, 2026-Q3: 90, 2026-Q4: 92 }
+input avg_salary_q : kEUR/hc flow over q = 16
