@@ -365,6 +365,9 @@ pub struct Event {
     pub value: f64,
     /// Formula body for kind "formula" (escaped in the log line).
     pub text: Option<String>,
+    /// Wall-clock unix seconds, stamped by the server at append time
+    /// (0 = unknown/legacy). Audit metadata — not part of the semantics.
+    pub ts: u64,
 }
 
 fn esc_field(s: &str) -> String {
@@ -392,12 +395,12 @@ fn unesc_field(s: &str) -> String {
 
 impl Event {
     pub fn patch(seq: u64, user: &str, name: &str, member: Option<String>, period: Option<usize>, value: f64) -> Event {
-        Event { seq, user: user.into(), kind: "patch".into(), name: name.into(), member, period, value, text: None }
+        Event { seq, user: user.into(), kind: "patch".into(), name: name.into(), member, period, value, text: None, ts: 0 }
     }
 
     pub fn to_line(&self) -> String {
         format!(
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             self.seq,
             self.user,
             self.kind,
@@ -405,7 +408,8 @@ impl Event {
             self.member.as_deref().unwrap_or("-"),
             self.period.map(|p| p.to_string()).unwrap_or_else(|| "-".into()),
             self.value,
-            self.text.as_deref().map(esc_field).unwrap_or_else(|| "-".into())
+            self.text.as_deref().map(esc_field).unwrap_or_else(|| "-".into()),
+            self.ts
         )
     }
 
@@ -422,8 +426,9 @@ impl Event {
                 period: if parts[4] == "-" { None } else { Some(parts[4].parse().map_err(|_| "bad period")?) },
                 value: parts[5].parse().map_err(|_| "bad value")?,
                 text: None,
+                ts: 0,
             }),
-            8 => Ok(Event {
+            8 | 9 => Ok(Event {
                 seq: parts[0].parse().map_err(|_| "bad seq")?,
                 user: parts[1].to_string(),
                 kind: parts[2].to_string(),
@@ -432,6 +437,7 @@ impl Event {
                 period: if parts[5] == "-" { None } else { Some(parts[5].parse().map_err(|_| "bad period")?) },
                 value: parts[6].parse().map_err(|_| "bad value")?,
                 text: if parts[7] == "-" { None } else { Some(unesc_field(parts[7])) },
+                ts: parts.get(8).and_then(|t| t.parse().ok()).unwrap_or(0),
             }),
             _ => Err(format!("bad event line: {line}")),
         }

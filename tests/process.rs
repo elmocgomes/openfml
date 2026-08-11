@@ -100,11 +100,11 @@ fn process_and_formula_events_replay_from_the_chain() {
     let secret = b"round-secret";
     let events = vec![
         Event::patch(1, "alice", "spend", None, None, 120.0),
-        Event { seq: 2, user: "alice".into(), kind: "submit".into(), name: "marketing".into(), member: None, period: None, value: 0.0, text: None },
-        Event { seq: 3, user: "carol".into(), kind: "formula".into(), name: "total".into(), member: None, period: None, value: 0.0, text: Some("spend * 2 + 10".into()) },
-        Event { seq: 4, user: "carol".into(), kind: "reopen".into(), name: "marketing".into(), member: None, period: None, value: 0.0, text: None },
-        Event { seq: 5, user: "alice".into(), kind: "patch".into(), name: "spend".into(), member: None, period: None, value: 130.0, text: None },
-        Event { seq: 6, user: "carol".into(), kind: "lock".into(), name: "-".into(), member: None, period: None, value: 0.0, text: None },
+        Event { seq: 2, user: "alice".into(), kind: "submit".into(), name: "marketing".into(), member: None, period: None, value: 0.0, text: None, ts: 0 },
+        Event { seq: 3, user: "carol".into(), kind: "formula".into(), name: "total".into(), member: None, period: None, value: 0.0, text: Some("spend * 2 + 10".into()), ts: 0 },
+        Event { seq: 4, user: "carol".into(), kind: "reopen".into(), name: "marketing".into(), member: None, period: None, value: 0.0, text: None, ts: 0 },
+        Event { seq: 5, user: "alice".into(), kind: "patch".into(), name: "spend".into(), member: None, period: None, value: 130.0, text: None, ts: 0 },
+        Event { seq: 6, user: "carol".into(), kind: "lock".into(), name: "-".into(), member: None, period: None, value: 0.0, text: None, ts: 0 },
     ];
     let mut log = String::new();
     let mut prev = GENESIS.to_string();
@@ -144,6 +144,7 @@ fn formula_events_round_trip_escaped_bodies() {
         period: None,
         value: 0.0,
         text: Some("match t {\n  in plan -> spend\t* 2\n}".into()),
+        ts: 1_770_000_000,
     };
     let back = Event::from_line(&ev.to_line()).unwrap();
     assert_eq!(back, ev, "tabs and newlines survive the log line");

@@ -38,6 +38,29 @@
   #procBanner .tag.sub { border-color:#b8860b; color:#b8860b; }
   #procBanner button { font:inherit; font-size:.85em; border:1px solid var(--edge); background:transparent;
     border-radius:6px; padding:.1rem .55rem; cursor:pointer; }
+  #admin { position:fixed; right:1rem; top:4.5rem; width:min(560px, 92vw); max-height:78vh; overflow:auto;
+    background:Canvas; border:1px solid var(--edge); border-radius:10px; z-index:8;
+    box-shadow:0 8px 30px rgba(0,0,0,.3); padding:.8rem 1rem; }
+  #admin h3 { margin:.2rem 0 .5rem; font-size:.95rem; }
+  #admin h4 { margin:.8rem 0 .3rem; font-size:.85rem; opacity:.75; text-transform:uppercase; letter-spacing:.5px; }
+  #admin table { width:100%; font-size:.85em; }
+  #admin td, #admin th { text-align:left; padding:.15rem .5rem; border-bottom:1px solid var(--dim); }
+  #admin .close { float:right; cursor:pointer; opacity:.6; }
+  #admin button { font:inherit; font-size:.82em; border:1px solid var(--edge); background:transparent;
+    border-radius:6px; padding:.08rem .5rem; cursor:pointer; }
+  #admin input { font:inherit; font-size:.82em; width:100%; }
+  #admin .role-admin { color:#a626a4; font-weight:600; }
+  #admin .role-editor { color:var(--accent); }
+  #admin .role-viewer { opacity:.6; }
+  #admin .k-patch { color:var(--accent); } #admin .k-formula { color:#a626a4; }
+  #admin .k-submit { color:#b8860b; } #admin .k-lock { color:var(--bad); font-weight:600; }
+  #admin .k-reopen { color:var(--ok); }
+  #landing { position:fixed; inset:0; display:flex; align-items:center; justify-content:center;
+    background:Canvas; z-index:20; }
+  #landing .card { border:1px solid var(--edge); border-radius:12px; padding:1.5rem 2rem; max-width:26rem; }
+  #landing input { font:inherit; width:100%; margin:.6rem 0; padding:.3rem .5rem; }
+  #landing button { font:inherit; padding:.3rem .9rem; border:1px solid var(--accent); color:var(--accent);
+    background:transparent; border-radius:6px; cursor:pointer; }
   #scenBanner button { font:inherit; font-size:.85em; border:1px solid currentColor; color:inherit;
     background:transparent; border-radius:5px; padding:.05rem .5rem; cursor:pointer; }
   #split { cursor: col-resize; background: transparent; position:relative; }
@@ -658,6 +681,23 @@ async function refreshFromServer(us, what) {
   const box = document.getElementById("src");
   if (m.src !== box.value) { const top = box.scrollTop; box.value = m.src; box.scrollTop = top; if (typeof renderHl === "function") renderHl(); }
 }
+if (SERVER && !TOKEN) {
+  // ---- landing: ask for the access token ----
+  const div = document.createElement("div");
+  div.id = "landing";
+  div.innerHTML = `<div class="card"><h2>fml budget server</h2>
+    <p>Paste your access token (ask your finance admin — they can mint one for you).</p>
+    <input id="tokIn" placeholder="you.a1b2c3…" autofocus>
+    <button id="tokGo">connect</button></div>`;
+  document.body.appendChild(div);
+  const go = () => {
+    const t = document.getElementById("tokIn").value.trim();
+    if (t) location.search = `?server=${encodeURIComponent(SERVER)}&token=${encodeURIComponent(t)}`;
+  };
+  div.querySelector("#tokGo").addEventListener("click", go);
+  div.querySelector("#tokIn").addEventListener("keydown", e => { if (e.key === "Enter") go(); });
+  throw new Error("awaiting token");
+}
 if (SERVER) {
   // ---- connected client: the budget process, server-evaluated ----
   document.title = `fml · ${USER}`;
@@ -695,6 +735,7 @@ if (SERVER) {
       for (const d of proc.submitted) html += ` <button class="pReopen" data-d="${d}">reopen ${d}</button>`;
       if (!proc.locked) html += ` <button id="pLock">lock the budget</button>`;
       else html += ` <button class="pReopen" data-d="">unlock</button>`;
+      html += ` <button id="pManage">manage…</button>`;
     }
     b.innerHTML = html;
     b.querySelector("#pSubmit")?.addEventListener("click", async () => {
@@ -711,6 +752,53 @@ if (SERVER) {
       const r = await post("/lock");
       if (!r.ok) { setErr(r.error); return; }
       await refreshFromServer(0, "budget locked");
+    });
+    b.querySelector("#pManage")?.addEventListener("click", openAdmin);
+  }
+  async function openAdmin() {
+    document.getElementById("admin")?.remove();
+    const div = document.createElement("div");
+    div.id = "admin";
+    const users = await (await fetch(SERVER + "/users?token=" + encodeURIComponent(TOKEN))).json();
+    const logR = await (await fetch(SERVER + "/log" + qs())).json();
+    const rows = (users.users || []).map(u =>
+      `<tr><td>${u.user}</td><td>${u.dept}</td><td class="role-${u.role}">${u.role}</td>
+       <td><button class="mint" data-u="${u.user}">mint token</button></td></tr>`).join("");
+    const events = (logR.log || "").trim().split("\n").filter(Boolean).map(l => {
+      const f = l.split("\t");
+      if (f.length < 9) return null;
+      const [seq, who, kind, name, member, period, value, , ts] = f;
+      const when = ts && ts !== "0" ? new Date(Number(ts) * 1000).toLocaleString() : "";
+      const what = kind === "patch"
+        ? `${name}${member !== "-" ? "[" + member + "]" : ""}${period !== "-" ? "@" + period : ""} = ${value}`
+        : kind === "formula" ? `${name} = …` : name !== "-" ? name : "";
+      return `<tr><td>${seq}</td><td>${when}</td><td>${who}</td><td class="k-${kind}">${kind}</td><td>${what}</td></tr>`;
+    }).filter(Boolean).reverse().slice(0, 40).join("");
+    div.innerHTML = `<span class="close">✕</span><h3>manage · ${clientModel}</h3>
+      <h4>people</h4>
+      <table><tr><th>user</th><th>department</th><th>role</th><th></th></tr>${rows}</table>
+      <div id="mintOut"></div>
+      <h4>audit log <small style="opacity:.5">(latest first, signed chain)</small></h4>
+      <table><tr><th>#</th><th>when</th><th>who</th><th>action</th><th>what</th></tr>${events || "<tr><td colspan=5>no events yet</td></tr>"}</table>
+      <h4>round persistence</h4>
+      <p style="font-size:.82em;opacity:.8">Checkpoint writes the current numbers back to the model files,
+      archives the signed log, and starts the next round on that baseline. Typically done after lock.</p>
+      <button id="ckBtn">checkpoint this model</button> <span id="ckOut"></span>`;
+    document.body.appendChild(div);
+    div.querySelector(".close").addEventListener("click", () => div.remove());
+    div.querySelectorAll(".mint").forEach(btn => btn.addEventListener("click", async () => {
+      const r = await post("/mint", { user: btn.dataset.u });
+      document.getElementById("mintOut").innerHTML = r.ok
+        ? `<p style="font-size:.82em">token for <b>${btn.dataset.u}</b> — send it to them privately:<br>
+           <input readonly value="${r.token}" onclick="this.select()"></p>`
+        : `<p style="color:var(--bad)">${r.error}</p>`;
+    }));
+    div.querySelector("#ckBtn").addEventListener("click", async () => {
+      const r = await post("/checkpoint");
+      document.getElementById("ckOut").textContent = r.ok
+        ? `✓ written: ${r.files.join(", ")} · log archived`
+        : r.error;
+      if (r.ok) await refreshFromServer(0, "checkpointed — new round");
     });
   }
   window.refreshProcFromState = r => {

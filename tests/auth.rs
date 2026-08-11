@@ -72,9 +72,9 @@ fn signed_log(secret: &[u8], events: &[Event]) -> String {
 
 fn events() -> Vec<Event> {
     vec![
-        Event { seq: 1, user: "alice".into(), kind: "patch".into(), name: "a".into(), member: None, period: Some(0), value: 11.0, text: None },
-        Event { seq: 2, user: "bob".into(), kind: "patch".into(), name: "b".into(), member: None, period: None, value: 25.0, text: None },
-        Event { seq: 3, user: "alice".into(), kind: "patch".into(), name: "a".into(), member: None, period: Some(1), value: 12.0, text: None },
+        Event { seq: 1, user: "alice".into(), kind: "patch".into(), name: "a".into(), member: None, period: Some(0), value: 11.0, text: None, ts: 0 },
+        Event { seq: 2, user: "bob".into(), kind: "patch".into(), name: "b".into(), member: None, period: None, value: 25.0, text: None, ts: 0 },
+        Event { seq: 3, user: "alice".into(), kind: "patch".into(), name: "a".into(), member: None, period: Some(1), value: 12.0, text: None, ts: 0 },
     ]
 }
 

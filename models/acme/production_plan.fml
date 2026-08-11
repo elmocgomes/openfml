@@ -1,0 +1,8 @@
+// Production — material intensity and energy. Owned by production.
+input material_per_t : kEUR/t flow over Line, q = match Line {
+  Pipes    -> 1.1
+  Valves   -> 2.3
+  Fittings -> 1.3
+}
+input energy_use : mwh flow over q = { 2026-Q1: 31_000, 2026-Q2: 29_500, 2026-Q3: 28_800, 2026-Q4: 30_500 }
+input energy_price : kEUR/mwh flow over q = 0.12

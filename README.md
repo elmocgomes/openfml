@@ -543,6 +543,27 @@ The scheduler generalizes to the (measure × member × period) micro-graph.
   same editor transaction. Renaming to a keyword answers with a proper
   JSON-RPC error ("'round' is not a valid measure name"). Covered by
   the end-to-end protocol test (`tests/lsp.rs`).
+- **The budget-management system + ACME Industrial (slice 14)** — the
+  capstone. `models/acme/` is a complete industrial-company budget:
+  product-line revenue (volumes × prices over a Line dimension), direct
+  costs (materials, energy, labor), plant overhead ALLOCATED to lines
+  with cent-exact conservation, personnel, a capex → depreciation →
+  asset-base roll-forward, EBITDA/EBIT, four covenants, and a Downturn
+  scenario — five files, each owned by a department (sales, production,
+  HR, maintenance, finance). The server grew the management layer:
+  **timestamped audit events** (wall clock in the signed chain),
+  **GET /users** (the directory, admin-only), **POST /mint** (admins
+  issue teammate tokens from the UI), and **POST /checkpoint** — the
+  budget-cycle persistence act: write the approved numbers back to the
+  model files on disk, archive the signed log, and open the next round
+  on that baseline (lock → checkpoint → new round). The workbench
+  gained a **token landing page** and an **admin console** (people &
+  roles with one-click token minting, a readable timestamped audit
+  timeline, checkpoint with confirmation). The whole round is locked in
+  CI by an HTTP end-to-end test that spawns the real server: access
+  restriction, the gate matrix, minting, lock, checkpoint-to-disk, and
+  round two beginning on the new baseline (`tests/server_e2e.rs`,
+  `tests/industrial.rs`).
 - Still ahead — per-declaration unit-inference/scheduling queries,
   integer minor-unit representation, read-side information-flow
   control, TLS / reverse-proxy deployment.

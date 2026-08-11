@@ -289,6 +289,47 @@ fn main() {
             continue;
         };
 
+        if method == "GET" && path == "/users" {
+            if user.role != Role::Admin {
+                respond(&mut stream, 403, &err_json("the user directory is admin-only"));
+                continue;
+            }
+            let mut out = String::from("{\"ok\":true,\"users\":[");
+            for (k, u) in directory.users.iter().enumerate() {
+                if k > 0 {
+                    out.push(',');
+                }
+                out.push_str(&format!(
+                    "{{\"user\":\"{}\",\"dept\":\"{}\",\"role\":\"{}\"}}",
+                    json_escape(&u.name),
+                    json_escape(&u.dept),
+                    role_str(u.role)
+                ));
+            }
+            out.push_str("]}");
+            respond(&mut stream, 200, &out);
+            continue;
+        }
+        if method == "POST" && path == "/mint" {
+            if user.role != Role::Admin {
+                respond(&mut stream, 403, &err_json("token minting is admin-only"));
+                continue;
+            }
+            let Some(for_user) = get("user") else {
+                respond(&mut stream, 400, &err_json("need user"));
+                continue;
+            };
+            if directory.find(&for_user).is_none() {
+                respond(&mut stream, 404, &err_json("unknown user — add them to users.cfg first"));
+                continue;
+            }
+            respond(
+                &mut stream,
+                200,
+                &format!("{{\"ok\":true,\"token\":\"{}\"}}", json_escape(&make_token(&secret, &for_user))),
+            );
+            continue;
+        }
         if method == "GET" && path == "/models" {
             let mut out = format!(
                 "{{\"ok\":true,\"me\":{{\"user\":\"{}\",\"dept\":\"{}\",\"role\":\"{}\"}},\"models\":[",
@@ -389,6 +430,40 @@ fn main() {
                     &format!("{{\"ok\":true,\"src\":\"{}\"}}", json_escape(st.session.source())),
                 );
             }
+            ("POST", "/checkpoint") => {
+                // The budget-cycle persistence act (admin): write the
+                // current numbers back to the model files, archive the
+                // signed log, and start the next round on that baseline.
+                if user.role != Role::Admin {
+                    respond(&mut stream, 403, &err_json("checkpoint is admin-only"));
+                    continue;
+                }
+                let mut written = Vec::new();
+                for f in st.session.files() {
+                    let path = dir.join("models").join(&f.name);
+                    if let Err(e) = std::fs::write(&path, &f.text) {
+                        respond(&mut stream, 500, &err_json(&format!("write {}: {e}", f.name)));
+                        continue;
+                    }
+                    written.push(f.name.clone());
+                }
+                let archived = format!("{}.{}.archived", st.log_path.display(), st.next_seq - 1);
+                if st.log_path.exists() {
+                    let _ = std::fs::rename(&st.log_path, &archived);
+                }
+                st.next_seq = 1;
+                st.chain_tip = GENESIS.to_string();
+                st.process = Process::default();
+                respond(
+                    &mut stream,
+                    200,
+                    &format!(
+                        "{{\"ok\":true,\"files\":[{}],\"archived\":\"{}\"}}",
+                        written.iter().map(|w| format!("\"{}\"", json_escape(w))).collect::<Vec<_>>().join(","),
+                        json_escape(&archived)
+                    ),
+                );
+            }
             ("GET", "/log") => {
                 if user.role != Role::Admin {
                     respond(&mut stream, 403, &err_json("the audit log is admin-only"));
@@ -451,13 +526,17 @@ fn build_event(
     get: &dyn Fn(&str) -> Option<String>,
 ) -> Result<Event, String> {
     let seq = st.next_seq;
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
     match path {
         "/patch" => {
             let name = get("name").ok_or("need name")?;
             let value: f64 = get("value").ok_or("need value")?.parse().map_err(|_| "value must be a number")?;
             let member = get("member").filter(|m| m != "null" && !m.is_empty());
             let period: Option<usize> = get("period").and_then(|p| p.parse().ok());
-            Ok(Event { seq, user: user.name.clone(), kind: "patch".into(), name, member, period, value, text: None })
+            Ok(Event { seq, user: user.name.clone(), kind: "patch".into(), name, member, period, value, text: None, ts })
         }
         "/formula" => {
             let name = get("name").ok_or("need name")?;
@@ -471,6 +550,7 @@ fn build_event(
                 period: None,
                 value: 0.0,
                 text: Some(body),
+                ts,
             })
         }
         "/submit" => Ok(Event {
@@ -482,10 +562,11 @@ fn build_event(
             period: None,
             value: 0.0,
             text: None,
+            ts,
         }),
         "/reopen" => {
             let dept = get("dept").ok_or("need dept")?;
-            Ok(Event { seq, user: user.name.clone(), kind: "reopen".into(), name: dept, member: None, period: None, value: 0.0, text: None })
+            Ok(Event { seq, user: user.name.clone(), kind: "reopen".into(), name: dept, member: None, period: None, value: 0.0, text: None, ts })
         }
         "/lock" => Ok(Event {
             seq,
@@ -496,6 +577,7 @@ fn build_event(
             period: None,
             value: 0.0,
             text: None,
+            ts,
         }),
         _ => Err("unknown action".into()),
     }
