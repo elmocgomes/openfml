@@ -1,0 +1,463 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>fml · budget portal</title>
+<style>
+  :root {
+    --navy: #16283f; --navy2: #1e3554; --navy3: #27436a;
+    --bg: #f4f6f9; --card: #ffffff; --line: #e3e7ee;
+    --ink: #1c2430; --mut: #6b7686; --pri: #2f6fd0; --pri2: #e8f0fc;
+    --ok: #1e8e3e; --okbg: #e6f4ea; --warn: #b06000; --warnbg: #fdf3e1;
+    --bad: #c5221f; --badbg: #fce8e6; --amber: #fff8e1; --amber2: #f9edc0;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body { margin: 0; font: 14px/1.5 -apple-system, "Segoe UI", Inter, Roboto, sans-serif;
+         color: var(--ink); background: var(--bg); display: flex; }
+  .num { font-variant-numeric: tabular-nums; font-family: "SF Mono", ui-monospace, Menlo, monospace; font-size: .93em; }
+
+  /* ---- sidebar ---- */
+  #side { width: 232px; min-width: 232px; background: var(--navy); color: #cfd9e6;
+          display: flex; flex-direction: column; }
+  #side .logo { padding: 1.1rem 1.2rem .9rem; color: #fff; font-weight: 700; font-size: 1.05rem;
+                letter-spacing: .3px; border-bottom: 1px solid var(--navy3); }
+  #side .logo small { display:block; font-weight: 400; color: #8fa3bb; font-size: .72rem; letter-spacing: 1px;
+                text-transform: uppercase; margin-top: .15rem; }
+  #side select { margin: .9rem 1rem .4rem; width: calc(100% - 2rem); background: var(--navy2); color: #fff;
+                 border: 1px solid var(--navy3); border-radius: 6px; padding: .45rem .5rem; font: inherit; }
+  #side nav { margin-top: .6rem; flex: 1; }
+  #side nav a { display: flex; align-items: center; gap: .7rem; padding: .55rem 1.2rem; color: #cfd9e6;
+                text-decoration: none; font-size: .92rem; border-left: 3px solid transparent; cursor: pointer; }
+  #side nav a:hover { background: var(--navy2); }
+  #side nav a.on { background: var(--navy2); border-left-color: var(--pri); color: #fff; font-weight: 600; }
+  #side nav a .ic { width: 1.2em; text-align: center; opacity: .8; }
+  #side .whoami { padding: .9rem 1.2rem; border-top: 1px solid var(--navy3); display: flex; gap: .7rem; align-items: center; }
+  #side .avatar { width: 34px; height: 34px; border-radius: 50%; background: var(--pri); color: #fff;
+                  display: flex; align-items: center; justify-content: center; font-weight: 700; }
+  #side .whoami .nm { color: #fff; font-weight: 600; font-size: .9rem; }
+  #side .whoami .rl { color: #8fa3bb; font-size: .75rem; }
+
+  /* ---- main ---- */
+  #maincol { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  #topbar { background: var(--card); border-bottom: 1px solid var(--line); padding: .7rem 1.6rem;
+            display: flex; align-items: center; gap: 1rem; }
+  #crumb { font-weight: 700; font-size: 1.02rem; }
+  #crumb small { color: var(--mut); font-weight: 400; }
+  .pill { padding: .18rem .7rem; border-radius: 999px; font-size: .78rem; font-weight: 600; }
+  .pill.open { background: var(--okbg); color: var(--ok); }
+  .pill.submitted { background: var(--warnbg); color: var(--warn); }
+  .pill.locked { background: var(--badbg); color: var(--bad); }
+  #syncdot { margin-left: auto; color: var(--mut); font-size: .78rem; }
+  #content { flex: 1; overflow: auto; padding: 1.4rem 1.6rem; }
+
+  /* ---- cards & KPIs ---- */
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(215px, 1fr)); gap: 1rem; margin-bottom: 1.2rem; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: .9rem 1.1rem;
+          box-shadow: 0 1px 2px rgba(16,30,54,.04); }
+  .card .lbl { color: var(--mut); font-size: .78rem; text-transform: uppercase; letter-spacing: .6px; }
+  .card .val { font-size: 1.45rem; font-weight: 700; margin-top: .15rem; }
+  .card .val small { font-size: .75rem; color: var(--mut); font-weight: 400; margin-left: .3rem; }
+  .card svg { display: block; margin-top: .4rem; width: 100%; height: 34px; }
+  .card.cov { display: flex; align-items: center; gap: .8rem; }
+  .cov .dot { width: 12px; height: 12px; border-radius: 50%; }
+  .cov.ok .dot { background: var(--ok); } .cov.bad .dot { background: var(--bad); animation: blink 1.2s infinite; }
+  @keyframes blink { 50% { opacity: .35; } }
+  h2.sec { font-size: .85rem; text-transform: uppercase; letter-spacing: .8px; color: var(--mut); margin: 1.4rem 0 .7rem; }
+
+  /* ---- enterprise grid ---- */
+  .gridwrap { background: var(--card); border: 1px solid var(--line); border-radius: 10px; overflow: auto;
+              box-shadow: 0 1px 2px rgba(16,30,54,.04); }
+  table.grid { border-collapse: collapse; width: 100%; min-width: 640px; }
+  .grid th, .grid td { padding: .42rem .9rem; text-align: right; border-bottom: 1px solid var(--line);
+                       white-space: nowrap; }
+  .grid thead th { position: sticky; top: 0; background: #fafbfd; color: var(--mut); font-size: .78rem;
+                   text-transform: uppercase; letter-spacing: .5px; z-index: 2; border-bottom: 2px solid var(--line); }
+  .grid th:first-child, .grid td:first-child { text-align: left; position: sticky; left: 0; background: var(--card);
+                   z-index: 1; min-width: 190px; }
+  .grid tr.ghead td { background: #f0f3f8; font-weight: 700; color: var(--navy2); font-size: .85rem; }
+  .grid td.mname { padding-left: 2rem; color: var(--ink); }
+  .grid .unit { color: var(--mut); font-size: .78rem; margin-left: .45rem; font-weight: 400; }
+  .grid td.in { background: var(--amber); cursor: text; }
+  .grid td.in:hover { background: var(--amber2); }
+  .grid td.ro { color: #333c4b; }
+  .grid td.neg { color: var(--bad); }
+  .grid td.flash { animation: flash 1.1s; }
+  @keyframes flash { 0% { background: #d7e7ff; } }
+  .grid td input { width: 6.5em; font: inherit; text-align: right; border: 2px solid var(--pri); border-radius: 4px;
+                   padding: .05rem .3rem; outline: none; }
+  .legend { color: var(--mut); font-size: .78rem; margin: .6rem .2rem; }
+  .legend .sw { display: inline-block; width: .9em; height: .9em; border-radius: 3px; vertical-align: -2px;
+                margin: 0 .3em 0 1em; border: 1px solid var(--line); }
+
+  /* ---- process board ---- */
+  .depts { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 1rem; }
+  .dept { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 1rem 1.1rem; }
+  .dept h3 { margin: 0 0 .3rem; font-size: .95rem; text-transform: capitalize; }
+  .dept .st { font-size: .8rem; font-weight: 600; }
+  .dept.sub { border-left: 4px solid var(--warn); } .dept.sub .st { color: var(--warn); }
+  .dept.open { border-left: 4px solid var(--ok); } .dept.open .st { color: var(--ok); }
+  button.act { font: inherit; font-size: .85rem; font-weight: 600; border: 0; border-radius: 6px; cursor: pointer;
+               padding: .45rem 1rem; background: var(--pri); color: #fff; }
+  button.act.ghost { background: var(--pri2); color: var(--pri); }
+  button.act.danger { background: var(--badbg); color: var(--bad); }
+  button.act:disabled { opacity: .45; cursor: default; }
+  .toolbar { display: flex; gap: .6rem; margin: .9rem 0; flex-wrap: wrap; align-items: center; }
+
+  /* ---- tables (audit, people) ---- */
+  table.list { border-collapse: collapse; width: 100%; background: var(--card); }
+  .list th, .list td { text-align: left; padding: .5rem .9rem; border-bottom: 1px solid var(--line); font-size: .88rem; }
+  .list thead th { background: #fafbfd; color: var(--mut); font-size: .75rem; text-transform: uppercase; letter-spacing: .5px; }
+  .k-patch { color: var(--pri); font-weight: 600; } .k-formula { color: #7b3ff2; font-weight: 600; }
+  .k-submit { color: var(--warn); font-weight: 600; } .k-lock { color: var(--bad); font-weight: 700; }
+  .k-reopen { color: var(--ok); font-weight: 600; }
+  .rolebadge { padding: .1rem .55rem; border-radius: 999px; font-size: .75rem; font-weight: 700; }
+  .rolebadge.admin { background: #f3e8fd; color: #7b3ff2; }
+  .rolebadge.editor { background: var(--pri2); color: var(--pri); }
+  .rolebadge.viewer { background: #eef0f3; color: var(--mut); }
+  .tok { width: 100%; font: .8rem ui-monospace, monospace; padding: .35rem .5rem; margin-top: .4rem;
+         border: 1px solid var(--line); border-radius: 6px; background: #fafbfd; }
+  #toast { position: fixed; bottom: 1.2rem; right: 1.4rem; background: var(--navy); color: #fff; padding: .6rem 1.1rem;
+           border-radius: 8px; font-size: .88rem; box-shadow: 0 6px 24px rgba(0,0,0,.25); display: none; z-index: 40; }
+  #toast.bad { background: var(--bad); }
+
+  /* ---- login ---- */
+  #login { position: fixed; inset: 0; background: var(--navy); display: flex; align-items: center;
+           justify-content: center; z-index: 50; }
+  #login .box { background: var(--card); border-radius: 14px; padding: 2.2rem 2.4rem; width: min(420px, 92vw);
+                box-shadow: 0 20px 60px rgba(0,0,0,.4); }
+  #login h1 { margin: 0 0 .2rem; font-size: 1.3rem; }
+  #login p { color: var(--mut); font-size: .88rem; }
+  #login input { width: 100%; font: inherit; padding: .55rem .7rem; border: 1px solid var(--line);
+                 border-radius: 8px; margin: .7rem 0 1rem; }
+  #login button { width: 100%; }
+</style>
+</head>
+<body>
+<div id="login" style="display:none">
+  <div class="box">
+    <h1>Budget Portal</h1>
+    <p>Enter your access token. Your finance administrator can issue one for you.</p>
+    <input id="loginTok" placeholder="you.a1b2c3…" autofocus>
+    <button class="act" id="loginGo">Sign in</button>
+  </div>
+</div>
+
+<aside id="side" style="display:none">
+  <div class="logo">Budget Portal<small>powered by fml</small></div>
+  <select id="modelSel"></select>
+  <nav>
+    <a data-p="dash" class="on"><span class="ic">◧</span>Dashboard</a>
+    <a data-p="entry"><span class="ic">▦</span>Budget entry</a>
+    <a data-p="process"><span class="ic">◷</span>Workflow</a>
+    <a data-p="audit" id="navAudit" style="display:none"><span class="ic">☰</span>Audit log</a>
+    <a data-p="admin" id="navAdmin" style="display:none"><span class="ic">⚙</span>Administration</a>
+  </nav>
+  <div class="whoami"><div class="avatar" id="avatar">?</div>
+    <div><div class="nm" id="whoNm">…</div><div class="rl" id="whoRl">…</div></div></div>
+</aside>
+
+<div id="maincol" style="display:none">
+  <div id="topbar">
+    <span id="crumb">Dashboard</span>
+    <span class="pill open" id="roundPill">round open</span>
+    <span id="syncdot">●</span>
+  </div>
+  <div id="content"></div>
+</div>
+<div id="toast"></div>
+
+<script type="module">
+const P = new URLSearchParams(location.search);
+const SERVER = P.get("server") || "http://localhost:5199";
+let TOKEN = P.get("token") || localStorage.getItem("fml:portal:token") || "";
+let ME = null, MODEL = P.get("model") || "", MODELS = [], STATE = null, PROC = { locked: false, submitted: [] };
+let GRANTS = [], PAGE = "dash", lastSeq = -1;
+const $ = id => document.getElementById(id);
+const qs = () => `?token=${encodeURIComponent(TOKEN)}&model=${encodeURIComponent(MODEL)}`;
+const get = async ep => (await fetch(SERVER + ep)).json();
+const post = (ep, body) => fetch(SERVER + ep, { method: "POST",
+  body: JSON.stringify(Object.assign({ token: TOKEN, model: MODEL }, body || {})) }).then(r => r.json());
+const nf = new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 });
+const fmt = v => v === null || v === undefined ? "·"
+  : v < 0 ? `(${nf.format(-v)})` : nf.format(v);
+function toast(msg, bad) {
+  const t = $("toast");
+  t.textContent = msg;
+  t.className = bad ? "bad" : "";
+  t.style.display = "block";
+  clearTimeout(t._h);
+  t._h = setTimeout(() => t.style.display = "none", 2600);
+}
+function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;"); }
+
+// ---- boot ----------------------------------------------------------------
+async function boot() {
+  if (!TOKEN) { showLogin(); return; }
+  let mi;
+  try { mi = await get("/models?token=" + encodeURIComponent(TOKEN)); } catch { showLogin("Server unreachable at " + SERVER); return; }
+  if (!mi.ok) { showLogin(mi.error || "invalid token"); return; }
+  localStorage.setItem("fml:portal:token", TOKEN);
+  ME = mi.me; MODELS = mi.models;
+  MODEL = MODEL && MODELS.some(m => m.model === MODEL) ? MODEL : (MODELS[0]?.model || "");
+  $("login").style.display = "none";
+  $("side").style.display = "flex";
+  $("maincol").style.display = "flex";
+  $("avatar").textContent = ME.user.slice(0, 2).toUpperCase();
+  $("whoNm").textContent = ME.user;
+  $("whoRl").textContent = `${ME.dept} · ${ME.role}`;
+  $("navAudit").style.display = ME.role === "admin" ? "" : "none";
+  $("navAdmin").style.display = ME.role === "admin" ? "" : "none";
+  const sel = $("modelSel");
+  sel.innerHTML = MODELS.map(m => `<option${m.model === MODEL ? " selected" : ""}>${esc(m.model)}</option>`).join("");
+  sel.onchange = async () => { MODEL = sel.value; await refresh(); renderPage(); };
+  document.querySelectorAll("#side nav a").forEach(a => a.onclick = () => {
+    document.querySelectorAll("#side nav a").forEach(x => x.classList.toggle("on", x === a));
+    PAGE = a.dataset.p; renderPage();
+  });
+  await refresh();
+  renderPage();
+  setInterval(async () => {
+    try {
+      const s = await get("/seq" + qs());
+      if (s.process) PROC = s.process;
+      renderRound();
+      if (s.seq !== lastSeq) { await refresh(); renderPage(); $("syncdot").textContent = "● live"; }
+    } catch { $("syncdot").textContent = "○ offline"; }
+  }, 2000);
+}
+function showLogin(msg) {
+  $("login").style.display = "flex";
+  if (msg) { const p = $("login").querySelector("p"); p.textContent = msg; p.style.color = "var(--bad)"; }
+  $("loginGo").onclick = () => { TOKEN = $("loginTok").value.trim(); if (TOKEN) boot(); };
+  $("loginTok").onkeydown = e => { if (e.key === "Enter") $("loginGo").click(); };
+}
+async function refresh() {
+  STATE = await get("/state" + qs());
+  PROC = STATE.process || PROC;
+  lastSeq = STATE.seq;
+  const g = await get("/grants" + qs());
+  GRANTS = g.ok ? (g.users.find(u => u.user === ME.user) || { grants: [] }).grants : [];
+  renderRound();
+}
+function canEdit() {
+  return !PROC.locked && ME.role !== "viewer" && (ME.role === "admin" || !PROC.submitted.includes(ME.dept));
+}
+function authorized(measure, member) {
+  return GRANTS.some(g => g.measure === "*" || (g.measure === measure && (g.member === null || g.member === member)));
+}
+function renderRound() {
+  const pill = $("roundPill");
+  if (PROC.locked) { pill.className = "pill locked"; pill.textContent = "BUDGET LOCKED"; }
+  else if (PROC.submitted.includes(ME.dept) && ME.role !== "admin") { pill.className = "pill submitted"; pill.textContent = `${ME.dept} submitted`; }
+  else { pill.className = "pill open"; pill.textContent = PROC.submitted.length ? `round open · ${PROC.submitted.length} submitted` : "round open"; }
+}
+
+// ---- pages ----------------------------------------------------------------
+function renderPage() {
+  $("crumb").innerHTML = { dash: "Dashboard", entry: "Budget entry", process: "Workflow",
+    audit: "Audit log", admin: "Administration" }[PAGE] + ` <small>· ${esc(MODEL)}</small>`;
+  ({ dash: pageDash, entry: pageEntry, process: pageProcess, audit: pageAudit, admin: pageAdmin })[PAGE]();
+}
+
+function spark(vals) {
+  const v = vals.filter(x => x !== null);
+  if (v.length < 2) return "";
+  const min = Math.min(...v), max = Math.max(...v), spread = max - min || 1;
+  const pts = v.map((x, i) => `${(i / (v.length - 1)) * 100},${30 - ((x - min) / spread) * 26}`).join(" ");
+  return `<svg viewBox="0 0 100 34" preserveAspectRatio="none">
+    <polyline points="${pts}" fill="none" stroke="var(--pri)" stroke-width="2"/></svg>`;
+}
+
+function pageDash() {
+  const s = STATE;
+  const covs = (s.asserts || []).map(([n, ok]) =>
+    `<div class="card cov ${ok ? "ok" : "bad"}"><span class="dot"></span>
+     <div><div class="lbl">covenant</div><div style="font-weight:600">${esc(n)}</div></div></div>`).join("");
+  const scalars = (s.scalars || []).filter(x => !x.input).map(x =>
+    `<div class="card"><div class="lbl">${esc(x.name)}</div>
+     <div class="val num">${fmt(x.val)}<small>${esc(x.unit)}</small></div></div>`).join("");
+  // Key computed series: undimensioned flows ranked by FY magnitude.
+  const keys = (s.series || [])
+    .filter(r => !r.input && !r.member)
+    .map(r => ({ r, fy: r.vals.reduce((a, b) => a + (b || 0), 0) }))
+    .sort((a, b) => Math.abs(b.fy) - Math.abs(a.fy))
+    .slice(0, 4)
+    .map(({ r, fy }) =>
+      `<div class="card"><div class="lbl">${esc(r.name)} · FY</div>
+       <div class="val num">${fmt(fy)}<small>${esc(r.unit)}</small></div>${spark(r.vals)}</div>`).join("");
+  const subs = PROC.submitted.map(d => `<span class="pill submitted">${esc(d)} submitted</span>`).join(" ")
+    || `<span class="pill open">no departments submitted yet</span>`;
+  $("content").innerHTML = `
+    <div class="cards">${keys}</div>
+    <h2 class="sec">Covenants & key figures</h2>
+    <div class="cards">${covs}${scalars}</div>
+    <h2 class="sec">Round status</h2>
+    <div class="card" style="display:flex;gap:.6rem;flex-wrap:wrap;align-items:center">${subs}
+      ${PROC.locked ? '<span class="pill locked">LOCKED</span>' : ""}</div>`;
+}
+
+function pageEntry() {
+  const s = STATE;
+  const editableRound = canEdit();
+  let rows = "", lastKey = null;
+  for (const r of s.series || []) {
+    const grouped = !!r.member;
+    if (grouped && r.key !== lastKey) {
+      rows += `<tr class="ghead"><td colspan="${s.periods.length + 1}">${esc(r.key)}<span class="unit">${esc(r.unit)}</span></td></tr>`;
+    }
+    lastKey = grouped ? r.key : null;
+    const label = grouped ? r.member : r.name;
+    rows += `<tr><td class="${grouped ? "mname" : ""}">${esc(label)}${grouped ? "" : `<span class="unit">${esc(r.unit)}</span>`}</td>`;
+    r.vals.forEach((v, t) => {
+      const inRange = t >= r.range[0] && t <= r.range[1];
+      const sited = r.edit === "all" ? inRange : Array.isArray(r.edit) && r.edit.includes(t);
+      const editable = r.input && sited && editableRound && authorized(r.key, r.member || null);
+      const cls = editable ? "in" : "ro";
+      rows += `<td class="num ${cls}${v !== null && v < 0 ? " neg" : ""}${inRange ? "" : " ro"}"
+        ${editable ? `data-key="${esc(r.key)}" data-member="${esc(r.member || "")}" data-t="${t}"` : ""}>${inRange ? fmt(v) : "·"}</td>`;
+    });
+    rows += "</tr>";
+  }
+  $("content").innerHTML = `
+    <div class="toolbar">
+      ${!PROC.submitted.includes(ME.dept) && ME.role !== "viewer" && !PROC.locked
+        ? `<button class="act" id="submitBtn">Submit ${esc(ME.dept)}'s numbers</button>` : ""}
+      <span class="legend">editable<span class="sw" style="background:var(--amber)"></span>
+        computed<span class="sw" style="background:#fff"></span></span>
+    </div>
+    <div class="gridwrap"><table class="grid">
+      <thead><tr><th>Measure</th>${s.periods.map(p => `<th>${esc(p)}</th>`).join("")}</tr></thead>
+      <tbody>${rows}</tbody></table></div>`;
+  $("submitBtn")?.addEventListener("click", async () => {
+    const r = await post("/submit");
+    if (!r.ok) { toast(r.error, true); return; }
+    PROC = r.process; toast(`${ME.dept} submitted — finance can now review`); await refresh(); renderPage();
+  });
+  document.querySelectorAll("td.in").forEach(td => td.addEventListener("click", () => {
+    if (td.querySelector("input")) return;
+    const old = td.textContent.replace(/[(),]/g, m => m === "(" ? "-" : "");
+    td.innerHTML = `<input value="${old === "·" ? "" : old}">`;
+    const inp = td.querySelector("input");
+    inp.focus(); inp.select();
+    let done = false; // Enter commits, then the re-render blurs the input — fire once.
+    const commit = async () => {
+      if (done) return;
+      done = true;
+      const v = Number(inp.value);
+      if (!Number.isFinite(v) || inp.value.trim() === "") { renderPage(); return; }
+      if (v === Number(old)) { renderPage(); return; }
+      const r = await post("/patch", { name: td.dataset.key, member: td.dataset.member, period: td.dataset.t, value: String(v) });
+      if (!r.ok) { toast(r.error, true); renderPage(); return; }
+      await refresh(); renderPage(); toast(`saved · commit #${r.seq}`);
+    };
+    inp.addEventListener("keydown", e => {
+      if (e.key === "Enter") commit();
+      if (e.key === "Escape") { done = true; renderPage(); }
+    });
+    inp.addEventListener("blur", commit);
+  }));
+}
+
+function pageProcess() {
+  const depts = new Set(PROC.submitted);
+  depts.add(ME.dept);
+  const cards = [...depts].map(d => {
+    const sub = PROC.submitted.includes(d);
+    return `<div class="dept ${sub ? "sub" : "open"}"><h3>${esc(d)}</h3>
+      <div class="st">${sub ? "✓ submitted" : "○ open"}</div>
+      ${ME.role === "admin" && sub ? `<div style="margin-top:.6rem"><button class="act ghost reopen" data-d="${esc(d)}">Reopen</button></div>` : ""}
+      ${d === ME.dept && !sub && ME.role !== "viewer" && !PROC.locked ? `<div style="margin-top:.6rem"><button class="act" id="pSubmit">Submit</button></div>` : ""}
+    </div>`;
+  }).join("");
+  $("content").innerHTML = `
+    <div class="depts">${cards}</div>
+    <h2 class="sec">Round control</h2>
+    <div class="card"><div class="toolbar" style="margin:0">
+      ${ME.role === "admin" ? (PROC.locked
+        ? `<button class="act ghost" id="unlockBtn">Unlock the budget</button>`
+        : `<button class="act danger" id="lockBtn">Lock the budget</button>`) : ""}
+      <span style="color:var(--mut);font-size:.85rem">
+        ${PROC.locked ? "The budget is final — no further changes." :
+          "Departments submit when done; finance reviews, reopens if needed, then locks."}</span>
+    </div></div>`;
+  $("pSubmit")?.addEventListener("click", async () => {
+    const r = await post("/submit");
+    if (!r.ok) { toast(r.error, true); return; }
+    PROC = r.process; renderRound(); renderPage(); toast("submitted");
+  });
+  document.querySelectorAll(".reopen").forEach(b => b.addEventListener("click", async () => {
+    const r = await post("/reopen", { dept: b.dataset.d });
+    if (!r.ok) { toast(r.error, true); return; }
+    PROC = r.process; renderRound(); renderPage(); toast(`${b.dataset.d} reopened`);
+  }));
+  $("lockBtn")?.addEventListener("click", async () => {
+    const r = await post("/lock");
+    if (!r.ok) { toast(r.error, true); return; }
+    PROC = r.process; renderRound(); renderPage(); toast("budget locked");
+  });
+  $("unlockBtn")?.addEventListener("click", async () => {
+    const r = await post("/reopen", { dept: "" });
+    if (!r.ok) { toast(r.error, true); return; }
+    PROC = r.process; renderRound(); renderPage(); toast("unlocked");
+  });
+}
+
+async function pageAudit() {
+  const r = await get("/log" + qs());
+  const rows = (r.log || "").trim().split("\n").filter(Boolean).map(l => {
+    const f = l.split("\t");
+    if (f.length < 9) return null;
+    const [seq, who, kind, name, member, period, value, , ts] = f;
+    const when = ts && ts !== "0" ? new Date(Number(ts) * 1000).toLocaleString() : "—";
+    const what = kind === "patch" ? `${name}${member !== "-" ? `[${member}]` : ""}${period !== "-" ? ` @ ${STATE.periods?.[Number(period)] ?? period}` : ""} = ${value}`
+      : kind === "formula" ? `${name} — formula changed` : name !== "-" ? name : "";
+    return `<tr><td>${seq}</td><td>${when}</td><td>${esc(who)}</td>
+      <td class="k-${kind}">${kind}</td><td class="num" style="text-align:left">${esc(what)}</td></tr>`;
+  }).filter(Boolean).reverse().join("");
+  $("content").innerHTML = `
+    <div class="card" style="margin-bottom:1rem;color:var(--mut);font-size:.85rem">
+      Every entry is signed over the previous one — edited, deleted or reordered history refuses to load.</div>
+    <div class="gridwrap"><table class="list">
+      <thead><tr><th>#</th><th>When</th><th>Who</th><th>Action</th><th>Detail</th></tr></thead>
+      <tbody>${rows || "<tr><td colspan=5>no events this round</td></tr>"}</tbody></table></div>`;
+}
+
+async function pageAdmin() {
+  const u = await get("/users?token=" + encodeURIComponent(TOKEN));
+  const rows = (u.users || []).map(x => `
+    <tr><td>${esc(x.user)}</td><td style="text-transform:capitalize">${esc(x.dept)}</td>
+      <td><span class="rolebadge ${x.role}">${x.role}</span></td>
+      <td><button class="act ghost mint" data-u="${esc(x.user)}">Issue token</button></td></tr>`).join("");
+  $("content").innerHTML = `
+    <h2 class="sec" style="margin-top:0">People & access</h2>
+    <div class="gridwrap"><table class="list">
+      <thead><tr><th>User</th><th>Department</th><th>Role</th><th></th></tr></thead>
+      <tbody>${rows}</tbody></table></div>
+    <div id="mintOut"></div>
+    <p style="color:var(--mut);font-size:.83rem">Roles and departments are declared in
+      <code>users.cfg</code> / <code>access.cfg</code>; restart the server after editing.</p>
+    <h2 class="sec">Round persistence</h2>
+    <div class="card"><p style="margin:.2rem 0 .8rem;color:var(--mut);font-size:.88rem">
+      Checkpoint writes the approved numbers back into the model files, archives the signed
+      audit log, and opens the next round on that baseline. Typically run after locking.</p>
+      <button class="act" id="ckBtn">Checkpoint this model</button> <span id="ckOut" style="font-size:.85rem"></span></div>`;
+  document.querySelectorAll(".mint").forEach(b => b.addEventListener("click", async () => {
+    const r = await post("/mint", { user: b.dataset.u });
+    $("mintOut").innerHTML = r.ok
+      ? `<div class="card" style="margin-top:.8rem"><b>Token for ${esc(b.dataset.u)}</b> — share privately;
+         they sign in with it at this portal.<input class="tok" readonly value="${esc(r.token)}" onclick="this.select()"></div>`
+      : `<p style="color:var(--bad)">${esc(r.error)}</p>`;
+  }));
+  $("ckBtn").addEventListener("click", async () => {
+    const r = await post("/checkpoint");
+    $("ckOut").textContent = r.ok ? `✓ ${r.files.length} files written · log archived · new round open` : r.error;
+    if (r.ok) { toast("checkpoint complete — new round"); await refresh(); }
+  });
+}
+
+boot();
+</script>
+</body>
+</html>

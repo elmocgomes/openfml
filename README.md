@@ -87,6 +87,10 @@ The scheduler generalizes to the (measure × member × period) micro-graph.
 - **WASM build** (`src/wasm.rs`, zero-dependency C-ABI):
   `cargo build --release --target wasm32-unknown-unknown`, then serve
   `www/`.
+- **The budget portal** (`www/app.html`) — the enterprise front end for
+  budget contributors and administrators (dashboard, entry grid,
+  workflow, audit, admin); pure HTTP client of `fml-server`, no wasm.
+  Described under slice 15 below.
 - **The workbench** (`www/index.html`) — the bi-representational surface
   from design doc 07: an editable **source pane** and an editable **grid
   projection** over one live session. Input rows render as in-place
@@ -564,6 +568,26 @@ The scheduler generalizes to the (measure × member × period) micro-graph.
   restriction, the gate matrix, minting, lock, checkpoint-to-disk, and
   round two beginning on the new baseline (`tests/server_e2e.rs`,
   `tests/industrial.rs`).
+- **The budget portal (slice 15)** — `www/app.html`, a second
+  zero-dependency single-file front end aimed at the people who *don't*
+  write fml: an enterprise EPM-style portal in the Hyperion / Anaplan
+  mold. Dark-navy navigation sidebar with the signed-in identity chip;
+  a **dashboard** of KPI cards with inline-SVG sparklines (top computed
+  measures by FY magnitude), covenant status lights, and round status;
+  a **budget-entry grid** in classic EPM grammar — amber cells you may
+  type into, white computed cells, measures grouped with indented
+  dimension members, finance-style `(1,234)` negatives, sticky
+  header/measure column; a **workflow board** of department cards with
+  submit/reopen/lock controls; the **audit timeline** and the **admin
+  console** (people & roles, one-click token minting, checkpoint) as
+  first-class pages. It speaks only HTTP to `fml-server` — no wasm —
+  so a contributor's browser never even loads the compiler. The grid
+  enforces nothing itself; every cell's editability is derived from the
+  server's structural edit-sites, the department grants, and the round
+  state, and the server re-checks every patch. Live-syncs on a 2-second
+  `/seq` poll: one user's submit flips everyone else's cells read-only
+  within a beat. Sign-in is a token landing page with localStorage
+  persistence.
 - Still ahead — per-declaration unit-inference/scheduling queries,
   integer minor-unit representation, read-side information-flow
   control, TLS / reverse-proxy deployment.
