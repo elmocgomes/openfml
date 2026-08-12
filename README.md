@@ -588,6 +588,21 @@ The scheduler generalizes to the (measure × member × period) micro-graph.
   `/seq` poll: one user's submit flips everyone else's cells read-only
   within a beat. Sign-in is a token landing page with localStorage
   persistence.
+- **Workbench restyle (slice 16)** — `www/index.html` now shares the
+  portal's design system (same tokens: navy chrome, blue accent, amber
+  inputs, light surface, committed `color-scheme: light`). Navy app bar
+  with brand block, segmented view control, and assert pills; UI chrome
+  in the system sans, monospace confined to the code editor and grid
+  numbers (tabular); enterprise grid styling (uppercase muted headers,
+  amber input rows, red negatives, portal-blue change flash); inspector,
+  tornado, admin console, and token landing as portal-style cards. Two
+  functional fixes surfaced by verification: the client-mode source
+  pane now renders as plain text through the same overlay (previously
+  invisible — highlighting needs the local wasm lexer, which client
+  mode never loads), and grid inputs carry `autocomplete="off"` plus a
+  no-op guard in the change handler, after a browser form-state restore
+  during reload resurrected a stale cell value and committed a phantom
+  patch into the signed audit log.
 - Still ahead — per-declaration unit-inference/scheduling queries,
   integer minor-unit representation, read-side information-flow
   control, TLS / reverse-proxy deployment.
