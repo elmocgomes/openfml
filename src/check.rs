@@ -184,6 +184,8 @@ pub struct MeasureInfo {
     /// shocks) instead of one draw per trial (parameter uncertainty).
     pub dist_per_period: bool,
     pub solve: Option<usize>,
+    /// Facts: the external table this input was bound from (`= data "…"`).
+    pub data_src: Option<String>,
     pub line: usize,
 }
 
@@ -497,6 +499,7 @@ pub fn check(model: &Model) -> Result<Checked, String> {
                 round: m.round,
                 dist_per_period: false,
                 solve,
+                data_src: m.data_src.clone(),
                 line: m.line,
             });
             decls.push(m.clone());
@@ -552,6 +555,7 @@ pub fn check(model: &Model) -> Result<Checked, String> {
     fn body_names_rec(body: &Body, out: &mut Vec<String>) {
         match body {
             Body::Expr(e) => all_names(e, out),
+            Body::Data { .. } => {}
             Body::Map(entries) => {
                 for (_, e) in entries {
                     all_names(e, out);
@@ -629,6 +633,7 @@ pub fn check(model: &Model) -> Result<Checked, String> {
         measures[i].dims.sort_unstable();
         let has_map = match &d.body {
             Body::Map(_) => true,
+            Body::Data { .. } => false,
             Body::DimMatch { arms, default, .. } => {
                 arms.iter().any(|(_, b)| matches!(b, Body::Map(_)))
                     || default.as_ref().map(|b| matches!(**b, Body::Map(_))).unwrap_or(false)
@@ -720,6 +725,7 @@ pub fn check(model: &Model) -> Result<Checked, String> {
             ) -> bool {
                 match b {
                     Body::Expr(e) => t_dep(e, flags, index, range_names),
+                    Body::Data { .. } => true,
                     Body::Map(_) => true,
                     Body::DimMatch { arms, default, .. } => {
                         arms.iter().any(|(_, a)| body_tdep(a, flags, index, range_names))
@@ -835,7 +841,9 @@ pub fn check(model: &Model) -> Result<Checked, String> {
             }
             let e = match &measures[i].body {
                 Body::Expr(e) => e.clone(),
-                Body::Map(_) | Body::DimMatch { .. } => unreachable!("inputs are annotated"),
+                Body::Map(_) | Body::DimMatch { .. } | Body::Data { .. } => {
+                    unreachable!("inputs are annotated")
+                }
             };
             let mut names = Vec::new();
             all_names(&e, &mut names);
@@ -1020,6 +1028,9 @@ pub fn check(model: &Model) -> Result<Checked, String> {
                 .map_err(|e| format!("line {}: in '{}': {}", measures[i].line, measures[i].name, e))?;
             match arm {
                 Body::Expr(e) => check_expr(e, i, &asg)?,
+                Body::Data { file, .. } => {
+                    return Err(format!("data file \"{file}\" is not loaded"))
+                }
                 Body::Map(entries) => {
                     for (_, e) in entries {
                         check_expr(e, i, &asg)?;
@@ -1209,6 +1220,7 @@ pub fn check(model: &Model) -> Result<Checked, String> {
                         break;
                     }
                     Body::Map(_) => break, // map literals: init-time values only
+                    Body::Data { .. } => break, // external facts: init-time values only
                     Body::DimMatch { dim, arms, default } => {
                         let did = dims.iter().position(|d| d.name == *dim).unwrap();
                         let mname = &dims[did].members[asg[did]];
@@ -1406,6 +1418,12 @@ pub fn check(model: &Model) -> Result<Checked, String> {
                 };
                 match body {
                     Body::Expr(e) => check_one(e)?,
+                    Body::Data { .. } => {
+                        return Err(format!(
+                            "line {oline}: scenario '{}': data bodies are not allowed in overrides",
+                            sc.name
+                        ))
+                    }
                     Body::Map(entries) => {
                         if !measures[m].is_series {
                             return Err(format!(

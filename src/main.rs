@@ -34,7 +34,20 @@ fn main() -> ExitCode {
         }
     };
 
-    let checked = match fml::compile(&src) {
+    // Parse, bind the fact plane (data files resolve beside the model),
+    // then check — the CLI equivalent of compile() with a live resolver.
+    let checked = match (|| -> Result<_, String> {
+        let mut model = fml::Parser::parse(&src)?;
+        fml::bind_data(
+            &mut model,
+            &mut |f| {
+                std::fs::read_to_string(base.join(f))
+                    .map_err(|e| format!("data file \"{f}\": {e}"))
+            },
+            &mut Vec::new(),
+        )?;
+        fml::check(&model)
+    })() {
         Ok(c) => c,
         Err(e) => {
             eprintln!("error: {e}");

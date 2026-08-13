@@ -21,6 +21,13 @@ static mut ACTIVE_SCENARIO: Option<String> = None;
 /// resolver. The host fetches missing includes on demand and retries.
 static mut FILES: Vec<(String, String)> = Vec::new();
 
+/// Fact-plane resolver over the host-provided FILES set (same registry
+/// as includes; the host fetches missing files on demand and retries).
+fn data_resolver(f: &str) -> Result<String, String> {
+    unsafe { FILES.iter().find(|(n, _)| n == f).map(|(_, t)| t.clone()) }
+        .ok_or_else(|| format!("data file \"{f}\" is not loaded"))
+}
+
 fn set_result(s: String) {
     unsafe {
         RESULT = s.into_bytes();
@@ -268,7 +275,7 @@ pub extern "C" fn fml_load() -> i32 {
     // first — a trivia-only edit reuses the whole analysis and runtime
     // state; a semantic edit rebuilds, naming the changed declarations.
     if let Some(sess) = unsafe { SESSION.as_mut() } {
-        if let Ok(rs) = sess.reload(expanded.clone()) {
+        if let Ok(rs) = sess.reload_resolve(expanded.clone(), &mut data_resolver) {
             let changed: Vec<String> =
                 rs.changed.iter().map(|c| format!("\"{}\"", json_escape(c))).collect();
             let stats_json = format!(
@@ -294,7 +301,7 @@ pub extern "C" fn fml_load() -> i32 {
         }
         // reload failed to compile → fall through to the salvage path.
     }
-    match Session::new_expanded(expanded.clone()) {
+    match Session::new_expanded_resolve(expanded.clone(), &mut data_resolver) {
         Ok(mut s) => match s.run_full() {
             Ok(stats) => {
                 let stats_json = format!(
@@ -321,10 +328,11 @@ pub extern "C" fn fml_load() -> i32 {
             // the remainder checks and runs, serve THAT with a warning —
             // the grid stays live while the file is mid-edit.
             let attempt = (|| -> Result<(Session, String, String), String> {
-                let sal = crate::parse_salvage(&expanded.flat)?;
+                let mut sal = crate::parse_salvage(&expanded.flat)?;
                 if sal.errors.is_empty() && sal.dropped.is_empty() {
                     return Err(String::new()); // nothing to salvage around
                 }
+                crate::bind_data(&mut sal.model, &mut data_resolver, &mut Vec::new())?;
                 let mut s = Session::from_model_parts(
                     &sal.model,
                     expanded.flat.clone(),
@@ -877,6 +885,7 @@ pub extern "C" fn fml_tokens() -> i32 {
         let kind = match &t.tok {
             Tok::Ws => "ws",
             Tok::Comment => "cm",
+            Tok::Str(_) => "str",
             Tok::Directive => "dir",
             Tok::Num(_) => "num",
             Tok::Pct(_) => "pct",

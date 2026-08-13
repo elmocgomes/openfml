@@ -20,6 +20,7 @@ use std::rc::Rc;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SyntaxKind {
+    StrLit,
     // Tokens.
     Whitespace,
     Comment,
@@ -87,6 +88,7 @@ fn tok_kind(t: &Tok) -> SyntaxKind {
         Tok::Num(_) => SyntaxKind::Num,
         Tok::Pct(_) => SyntaxKind::Pct,
         Tok::Sym(_) => SyntaxKind::Sym,
+        Tok::Str(_) => SyntaxKind::StrLit,
     }
 }
 

@@ -311,6 +311,10 @@ pub struct Session {
     /// The per-declaration REFERENCES query cache, keyed by semantic
     /// fingerprint — the first per-decl check query. Survives reloads.
     ref_cache: std::collections::HashMap<u64, Vec<String>>,
+    /// The fact plane: resolved external data tables (file → content),
+    /// captured at bind time and reused across reloads. Changing facts
+    /// goes through `reload_resolve`, never through token fingerprints.
+    data_files: Vec<(String, String)>,
     /// Whether the flat source is an include-expansion of the files (vs a
     /// single file verbatim). The segment map is DERIVED on demand by
     /// re-expanding — never stored, never shifted.
@@ -344,6 +348,16 @@ impl Session {
         Session::from_parts(exp.flat, exp.files, exp.segments)
     }
 
+    /// Like `new_expanded`, with a resolver for the fact plane: `= data
+    /// "file"` bodies bind through `resolve`; the resolved tables are kept
+    /// on the session and reused by later reloads.
+    pub fn new_expanded_resolve(
+        exp: crate::Expanded,
+        resolve: &mut dyn FnMut(&str) -> Result<String, String>,
+    ) -> Result<Session, String> {
+        Session::from_parts_resolve(exp.flat, exp.files, exp.segments, resolve)
+    }
+
     /// Build a session from an already-parsed model (e.g. a SALVAGED one:
     /// broken declarations dropped) over the original source text.
     pub fn from_model_parts(
@@ -361,8 +375,24 @@ impl Session {
         files: Vec<crate::SourceFile>,
         segments: Vec<crate::Segment>,
     ) -> Result<Session, String> {
-        let checked = crate::compile(&src)?;
-        Session::from_checked(checked, src, files, segments)
+        Session::from_parts_resolve(src, files, segments, &mut |f| {
+            Err(format!("data file \"{f}\" is not loaded"))
+        })
+    }
+
+    fn from_parts_resolve(
+        src: String,
+        files: Vec<crate::SourceFile>,
+        segments: Vec<crate::Segment>,
+        resolve: &mut dyn FnMut(&str) -> Result<String, String>,
+    ) -> Result<Session, String> {
+        let mut model = crate::parser::Parser::parse(&src)?;
+        let mut store = Vec::new();
+        crate::bind_data(&mut model, resolve, &mut store)?;
+        let checked = crate::check(&model)?;
+        let mut s = Session::from_checked(checked, src, files, segments)?;
+        s.data_files = store;
+        Ok(s)
     }
 
     /// Locate every edit site's literal in the CST as a tree path — the
@@ -447,6 +477,7 @@ impl Session {
             file_trees,
             file_site_paths,
             ref_cache: std::collections::HashMap::new(),
+            data_files: Vec::new(),
             expanded,
             cst,
             site_paths,
@@ -632,13 +663,29 @@ impl Session {
             }
         }
         // One parse serves both the analysis and the references query.
-        let model = crate::Parser::parse(&exp.flat)?;
+        let mut model = crate::Parser::parse(&exp.flat)?;
+        // The fact plane binds from the STORED tables — reload(exp) keeps
+        // facts fixed; changed facts go through reload_resolve.
+        let stored = self.data_files.clone();
+        let mut store = Vec::new();
+        crate::bind_data(
+            &mut model,
+            &mut |f| {
+                stored
+                    .iter()
+                    .find(|(n, _)| n == f)
+                    .map(|(_, t)| t.clone())
+                    .ok_or_else(|| format!("data file \"{f}\" is not loaded"))
+            },
+            &mut store,
+        )?;
         let mut fresh = Session::from_model_parts(
             &model,
             exp.flat.clone(),
             exp.files.clone(),
             exp.segments.clone(),
         )?;
+        fresh.data_files = store;
         // The references query: fingerprint-keyed, carried across reloads.
         let (mut hits, mut misses) = (0usize, 0usize);
         let mut cache = std::mem::take(&mut self.ref_cache);
@@ -782,6 +829,41 @@ impl Session {
             steps_run,
             query_hits: hits,
             query_misses: misses,
+        })
+    }
+
+    /// Reload with a LIVE fact resolver: external tables are re-resolved,
+    /// and changed facts force a full rebuild — token fingerprints cannot
+    /// see file contents, so the salsa fast path only applies when every
+    /// bound table is byte-identical.
+    pub fn reload_resolve(
+        &mut self,
+        exp: crate::Expanded,
+        resolve: &mut dyn FnMut(&str) -> Result<String, String>,
+    ) -> Result<ReloadStats, String> {
+        let mut model = crate::Parser::parse(&exp.flat)?;
+        let mut store = Vec::new();
+        crate::bind_data(&mut model, resolve, &mut store)?;
+        if store == self.data_files {
+            return self.reload(exp);
+        }
+        let checked = crate::check(&model)?;
+        let mut fresh =
+            Session::from_checked(checked, exp.flat, exp.files, exp.segments)?;
+        fresh.data_files = store;
+        fresh.ref_cache = std::mem::take(&mut self.ref_cache);
+        fresh.run_full()?;
+        let steps_run = fresh.checked.steps.len();
+        let total_decls = crate::cst::Red::root(&fresh.cst).decls().len();
+        *self = fresh;
+        Ok(ReloadStats {
+            reused: false,
+            changed: vec!["external data".into()],
+            affected: Vec::new(),
+            total_decls,
+            steps_run,
+            query_hits: 0,
+            query_misses: 0,
         })
     }
 
@@ -1319,6 +1401,9 @@ impl Session {
             {
                 let ctx = eval::Ctx { c: &self.checked, values: &mut self.values };
                 match body {
+                    Body::Data { .. } => {
+                        return Err("data bodies in scenario overrides are not supported".into())
+                    }
                     Body::DimMatch { .. } => {
                         return Err("match bodies in scenario overrides are not supported yet".into())
                     }
@@ -1998,6 +2083,10 @@ impl Session {
                             mi.round.map_or(J::Null, |(dp, _)| J::N(dp as f64)),
                         ),
                         ("editable".into(), J::B(has_site.contains(&m))),
+                        (
+                            "data".into(),
+                            mi.data_src.clone().map_or(J::Null, J::S),
+                        ),
                         (
                             "refs".into(),
                             J::A(refs_per[m].iter().map(|r| J::S(r.clone())).collect()),

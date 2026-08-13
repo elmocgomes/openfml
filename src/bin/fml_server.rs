@@ -215,7 +215,14 @@ fn main() {
             std::fs::read_to_string(base.join(rel)).map_err(|e| format!("include {rel}: {e}"))
         })
         .expect("expand includes");
-        let mut session = Session::new_expanded(exp).expect("compile model");
+        let mut session = Session::new_expanded_resolve(exp, &mut |f| {
+            if f.contains('/') || f.contains("..") {
+                return Err(format!("data file \"{f}\": path must be a bare file name"));
+            }
+            std::fs::read_to_string(base.join(f))
+                .map_err(|e| format!("data file \"{f}\": {e}"))
+        })
+        .expect("compile model");
         session.run_full().expect("evaluate model");
         let mut process = Process::default();
         let log_path = dir.join("logs").join(format!("{}.log", ma.file));

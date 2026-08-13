@@ -640,6 +640,31 @@ The scheduler generalizes to the (measure × member × period) micro-graph.
   One menu open at a time, outside-click and Escape close, items close
   on activation (`data-keep` for forms). Client mode keeps only what a
   contributor needs: brand, model, View, checks, and the process strip.
+- **The fact plane (slice 19)** — `input x : u flow over … = data
+  "file.csv" [sha256 "…"]`. The two-plane persistence strategy made
+  explicit: **assumptions stay in the code** (literal maps, reviewable
+  diffs, grid write-back, the whole lossless-CST machinery), while
+  **facts live in external tables** the model references. CSV shape is
+  header-driven (`value` | `period,value` | `<Dim>,period,value`);
+  `bind_data` desugars tables into ordinary map/match bodies BEFORE
+  checking, so units, coverage, broadcasting, explain and incremental
+  evaluation all apply unchanged — but the desugar runs post-parse, so
+  facts carry **no edit sites**: they are structurally not
+  literal-editable in every surface (workbench grid, `/patch`, goal-seek
+  apply), even for users holding a write grant. Facts change by
+  re-import: `Session::reload_resolve` re-resolves the tables and forces
+  a full rebuild when contents changed (token fingerprints cannot see
+  files), while byte-identical facts stay on the salsa fast path. The
+  optional `sha256` pin makes a checkpointed model reproducible down to
+  the exact table bytes. Resolvers everywhere: wasm (fetch-on-demand via
+  the include retry loop), fml-server (`models/` dir), the CLI and the
+  LSP (beside the model). ACME's `energy_price` is now a fact from
+  `energy_prices.csv` — the model view draws data nodes in their own
+  tint with "facts from <file>", and pedro, who holds the energy grant,
+  can patch his `energy_use` assumption but not the price facts.
+  `tests/data.rs`: binding, structural non-editability, the pin, the
+  host-retry error contract, coverage errors, and re-import ≡ fresh
+  compile (the equivalence theorem, as ever).
 - Still ahead — per-declaration unit-inference/scheduling queries,
   integer minor-unit representation, read-side information-flow
   control, TLS / reverse-proxy deployment.

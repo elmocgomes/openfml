@@ -155,6 +155,10 @@ pub enum Body {
     Expr(Expr),
     /// `{ 2026-01: 1.09, ... }` — inputs only.
     Map(Vec<(PeriodLit, Expr)>),
+    /// `= data "file.csv" [sha256 "…"]` — the fact plane: values load from
+    /// an external table and are NOT literal-editable (facts change by
+    /// re-import, not by typing). Replaced by `bind_data` before checking.
+    Data { file: String, sha256: Option<String> },
     /// Input-only: `match Dim { Member -> <map or expr> ... [else -> …] }` —
     /// the budget-template form: each member (cost center, entity…) owns an
     /// arm, and per-period map arms become grid-editable per member.
@@ -218,6 +222,8 @@ pub struct MeasureDecl {
     pub round: Option<(u32, RoundPolicy)>,
     pub body: Body,
     pub dist: Option<DistDecl>,
+    /// Set by `bind_data`: the external file this input's facts came from.
+    pub data_src: Option<String>,
     pub line: usize,
 }
 
@@ -386,6 +392,8 @@ pub fn body_references(b: &Body, out: &mut Vec<String>) {
                 body_references(d, out);
             }
         }
+        // External facts reference no measures.
+        Body::Data { .. } => {}
     }
 }
 

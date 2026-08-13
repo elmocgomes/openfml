@@ -8,6 +8,8 @@ pub enum Tok {
     Num(f64),
     /// `15%` stored as 0.15.
     Pct(f64),
+    /// `"…"` — a quoted string (data-file references).
+    Str(String),
     /// Single- and multi-char symbols: : = { } ( ) [ ] , + - * / . .. == ±
     Sym(&'static str),
     /// Trivia (lex_full only): a run of whitespace.
@@ -25,6 +27,7 @@ impl fmt::Display for Tok {
             Tok::Ident(s) => write!(f, "{s}"),
             Tok::Num(n) => write!(f, "{n}"),
             Tok::Pct(p) => write!(f, "{}%", p * 100.0),
+            Tok::Str(s) => write!(f, "\"{s}\""),
             Tok::Sym(s) => write!(f, "{s}"),
             Tok::Ws => write!(f, " "),
             Tok::Comment => write!(f, "//"),
@@ -101,6 +104,20 @@ pub fn lex_full(src: &str) -> Result<Vec<SpannedTok>, String> {
                     i += 1;
                 }
                 emit!(Tok::Comment);
+            }
+            '"' => {
+                // String literal (data-file references): no escapes, one line.
+                i += 1;
+                let s0 = i;
+                while i < chars.len() && chars[i] != '"' && chars[i] != '\n' {
+                    i += 1;
+                }
+                if i >= chars.len() || chars[i] != '"' {
+                    return Err(format!("line {line}: unterminated string"));
+                }
+                let text: String = chars[s0..i].iter().collect();
+                i += 1;
+                emit!(Tok::Str(text));
             }
             'i' if !line_has_real
                 && chars[i..].starts_with(&['i', 'n', 'c', 'l', 'u', 'd', 'e'])

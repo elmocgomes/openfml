@@ -254,9 +254,150 @@ pub fn parse_salvage(src: &str) -> Result<Salvaged, String> {
     Ok(Salvaged { model, errors, dropped })
 }
 
+/// Bind the fact plane: replace every `= data "file.csv" [sha256 "…"]`
+/// body with the values from its external table, BEFORE checking. The
+/// desugared bodies are ordinary maps/match arms — but built post-parse,
+/// so they carry NO edit sites: facts are structurally not
+/// literal-editable; they change by re-import.
+///
+/// CSV shape is header-driven:
+///   value                  → scalar (one data row)
+///   period,value           → period map
+///   <Dim>,period,value     → `match <Dim>` with one map arm per member
+/// Period labels use calendar spelling: `2026` | `2026-Q3` | `2026-07`.
+/// A `sha256` pin, when present, must match the content hash exactly.
+pub fn bind_data(
+    model: &mut ast::Model,
+    resolve: &mut dyn FnMut(&str) -> Result<String, String>,
+    store: &mut Vec<(String, String)>,
+) -> Result<(), String> {
+    fn period_label(s: &str, file: &str, ln: usize) -> Result<calendar::PeriodLit, String> {
+        let bad = || format!("data file \"{file}\" line {ln}: bad period label '{s}'");
+        let (y, rest) = match s.split_once('-') {
+            Some((y, r)) => (y, Some(r)),
+            None => (s, None),
+        };
+        let year: i64 = y.trim().parse().map_err(|_| bad())?;
+        match rest.map(str::trim) {
+            None => Ok(calendar::PeriodLit { year, sub: None, q_form: false }),
+            Some(r) => {
+                if let Some(q) = r.strip_prefix('Q') {
+                    let qn: u8 = q.parse().map_err(|_| bad())?;
+                    Ok(calendar::PeriodLit { year, sub: Some(qn), q_form: true })
+                } else {
+                    let m: u8 = r.parse().map_err(|_| bad())?;
+                    Ok(calendar::PeriodLit { year, sub: Some(m), q_form: false })
+                }
+            }
+        }
+    }
+    fn num(s: &str, file: &str, ln: usize) -> Result<f64, String> {
+        s.trim()
+            .replace('_', "")
+            .parse()
+            .map_err(|_| format!("data file \"{file}\" line {ln}: bad number '{}'", s.trim()))
+    }
+    for it in &mut model.items {
+        let ast::Item::Measure(m) = it else { continue };
+        let ast::Body::Data { file, sha256 } = &m.body else { continue };
+        let (file, pin) = (file.clone(), sha256.clone());
+        let text = match store.iter().find(|(n, _)| *n == file) {
+            Some((_, t)) => t.clone(),
+            None => {
+                let t = resolve(&file)?;
+                store.push((file.clone(), t.clone()));
+                t
+            }
+        };
+        if let Some(pin) = &pin {
+            let h = crypto::hex(&crypto::sha256(text.as_bytes()));
+            if h != *pin {
+                return Err(format!(
+                    "data file \"{file}\": content sha256 {h} does not match the pin {pin} \
+                     declared on '{}' — re-import deliberately (update the pin) or restore the file",
+                    m.name
+                ));
+            }
+        }
+        let mut lines = text
+            .lines()
+            .enumerate()
+            .map(|(i, l)| (i + 1, l.trim()))
+            .filter(|(_, l)| !l.is_empty());
+        let Some((_, header)) = lines.next() else {
+            return Err(format!("data file \"{file}\" is empty"));
+        };
+        let cols: Vec<&str> = header.split(',').map(str::trim).collect();
+        let split = |ln: usize, l: &str, want: usize| -> Result<Vec<String>, String> {
+            let f: Vec<String> = l.split(',').map(|c| c.trim().to_string()).collect();
+            if f.len() != want {
+                return Err(format!(
+                    "data file \"{file}\" line {ln}: expected {want} columns ({}), found {}",
+                    cols.join(","),
+                    f.len()
+                ));
+            }
+            Ok(f)
+        };
+        let body = match cols.as_slice() {
+            ["value"] => {
+                let Some((ln, l)) = lines.next() else {
+                    return Err(format!("data file \"{file}\": no value row"));
+                };
+                let f = split(ln, l, 1)?;
+                if lines.next().is_some() {
+                    return Err(format!(
+                        "data file \"{file}\": a scalar table has exactly one value row"
+                    ));
+                }
+                ast::Body::Expr(ast::Expr::Num(num(&f[0], &file, ln)?))
+            }
+            ["period", "value"] => {
+                let mut entries = Vec::new();
+                for (ln, l) in lines {
+                    let f = split(ln, l, 2)?;
+                    entries.push((period_label(&f[0], &file, ln)?, ast::Expr::Num(num(&f[1], &file, ln)?)));
+                }
+                ast::Body::Map(entries)
+            }
+            [dim, "period", "value"] => {
+                let mut arms: Vec<(String, Vec<(calendar::PeriodLit, ast::Expr)>)> = Vec::new();
+                for (ln, l) in lines {
+                    let f = split(ln, l, 3)?;
+                    let entry = (period_label(&f[1], &file, ln)?, ast::Expr::Num(num(&f[2], &file, ln)?));
+                    match arms.iter_mut().find(|(mb, _)| *mb == f[0]) {
+                        Some((_, es)) => es.push(entry),
+                        None => arms.push((f[0].clone(), vec![entry])),
+                    }
+                }
+                ast::Body::DimMatch {
+                    dim: dim.to_string(),
+                    arms: arms.into_iter().map(|(mb, es)| (mb, ast::Body::Map(es))).collect(),
+                    default: None,
+                }
+            }
+            _ => {
+                return Err(format!(
+                    "data file \"{file}\": header must be 'value', 'period,value' or \
+                     '<Dimension>,period,value' — found '{}'",
+                    cols.join(",")
+                ))
+            }
+        };
+        m.body = body;
+        m.data_src = Some(file);
+    }
+    Ok(())
+}
+
 /// Parse + check a source file.
 pub fn compile(src: &str) -> Result<Checked, String> {
-    let model = Parser::parse(src)?;
+    let mut model = Parser::parse(src)?;
+    bind_data(
+        &mut model,
+        &mut |f| Err(format!("data file \"{f}\" is not loaded")),
+        &mut Vec::new(),
+    )?;
     check(&model)
 }
 

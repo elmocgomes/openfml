@@ -250,7 +250,7 @@ fn open_or_change(docs: &mut HashMap<String, Doc>, uri: &str, text: String) {
     let prev = docs.remove(uri).and_then(|d| d.session);
     let (session, diags) = match exp {
         Err(e) => (None, vec![diag(&text, &e, 1)]),
-        Ok(exp) => match try_load(prev, exp.clone()) {
+        Ok(exp) => match try_load(prev, exp.clone(), dir.clone()) {
             Ok(s) => (Some(s), Vec::new()),
             Err(_) => {
                 // Salvage view: per-declaration errors + dropped dependents.
@@ -285,13 +285,21 @@ fn open_or_change(docs: &mut HashMap<String, Doc>, uri: &str, text: String) {
     docs.insert(uri.to_string(), Doc { text, session });
 }
 
-fn try_load(prev: Option<Session>, exp: Expanded) -> Result<Session, String> {
+fn try_load(
+    prev: Option<Session>,
+    exp: Expanded,
+    dir: Option<std::path::PathBuf>,
+) -> Result<Session, String> {
+    let mut resolve = |f: &str| -> Result<String, String> {
+        let base = dir.clone().unwrap_or_default();
+        std::fs::read_to_string(base.join(f)).map_err(|e| format!("data file \"{f}\": {e}"))
+    };
     if let Some(mut s) = prev {
-        if s.reload(exp.clone()).is_ok() {
+        if s.reload_resolve(exp.clone(), &mut resolve).is_ok() {
             return Ok(s);
         }
     }
-    let mut s = Session::new_expanded(exp)?;
+    let mut s = Session::new_expanded_resolve(exp, &mut resolve)?;
     s.run_full()?;
     Ok(s)
 }

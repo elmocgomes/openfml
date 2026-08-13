@@ -353,7 +353,7 @@ impl<'a> Ctx<'a> {
     fn body_expr(&self, m: usize) -> &Expr {
         match &self.c.measures[m].body {
             Body::Expr(e) => e,
-            Body::Map(_) | Body::DimMatch { .. } => {
+            Body::Data { .. } | Body::Map(_) | Body::DimMatch { .. } => {
                 unreachable!("map/match bodies are inputs, never scheduled")
             }
         }
@@ -488,6 +488,9 @@ pub fn init_inputs(c: &Checked, values: &mut Values) -> Result<(), String> {
                 }
             }
             match (body, mi.is_series) {
+                (Body::Data { file, .. }, _) => {
+                    return Err(format!("data file \"{file}\" is not loaded"))
+                }
                 (Body::Map(entries), true) => {
                     let mut by_idx: HashMap<usize, f64> = HashMap::new();
                     for (lit, e) in &entries {

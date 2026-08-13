@@ -11,7 +11,10 @@ fn session() -> fml::Session {
         std::fs::read_to_string(base.join(p)).map_err(|e| format!("{p}: {e}"))
     })
     .unwrap();
-    let mut s = fml::Session::new_expanded(exp).unwrap();
+    let mut s = fml::Session::new_expanded_resolve(exp, &mut |f: &str| {
+        std::fs::read_to_string(base.join(f)).map_err(|e| e.to_string())
+    })
+    .unwrap();
     s.run_full().unwrap();
     s
 }

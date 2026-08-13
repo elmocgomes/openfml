@@ -269,6 +269,14 @@ impl Parser {
     }
 
     /// `2026`, `2026-Q3`, or `2026-07` (only in period contexts).
+    fn expect_str(&mut self) -> Result<String, String> {
+        match self.bump() {
+            Some(Tok::Str(s)) => Ok(s),
+            other => Err(format!("line {}: expected a quoted string, found {}", self.line(),
+                other.map(|t| t.to_string()).unwrap_or_else(|| "end of input".into()))),
+        }
+    }
+
     fn period_lit(&mut self) -> Result<PeriodLit, String> {
         let year = self.expect_num()? as i64;
         if let Some(Tok::Sym("-")) = self.peek() {
@@ -750,6 +758,7 @@ impl Parser {
                 body: Body::Expr(Expr::Num(f64::NAN)),
                 round,
                 dist: Some(DistDecl { kind, params, per_period }),
+                data_src: None,
                 line,
             });
         }
@@ -808,13 +817,35 @@ impl Parser {
                 round,
                 body: Body::Expr(body),
                 dist: None,
+                data_src: None,
                 line,
             });
         }
         self.expect_sym("=")?;
         self.site_buf.clear();
         let b0 = self.pos;
-        let body = if matches!(self.peek(), Some(Tok::Sym("{"))) {
+        let body = if self.peek_ident() == Some("data")
+            && matches!(self.peek_at(1), Some(Tok::Str(_)))
+        {
+            // `= data "file.csv" [sha256 "…"]` — the fact plane. Values
+            // load from an external table via bind_data; no edit sites, so
+            // facts are structurally NOT literal-editable.
+            if !is_input {
+                return Err(format!(
+                    "line {}: 'data' bodies are for inputs — computed measures have formulas",
+                    self.line()
+                ));
+            }
+            self.pos += 1;
+            let file = self.expect_str()?;
+            let pin = if self.peek_ident() == Some("sha256") {
+                self.pos += 1;
+                Some(self.expect_str()?)
+            } else {
+                None
+            };
+            Body::Data { file, sha256: pin }
+        } else if matches!(self.peek(), Some(Tok::Sym("{"))) {
             // A `{` here is a period map (inputs). `match` bodies start with
             // the keyword, so no ambiguity.
             self.map_literal()?
@@ -840,7 +871,7 @@ impl Parser {
         } else {
             self.site_buf.clear();
         }
-        Ok(MeasureDecl { name, is_input, ann, over, init, round, body, dist: None, line })
+        Ok(MeasureDecl { name, is_input, ann, over, init, round, body, dist: None, data_src: None, line })
     }
 
     /// Input body: `match Dim { Member -> <map or expr> ... [else -> …] }`.

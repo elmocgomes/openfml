@@ -251,6 +251,7 @@
   #dag .node { cursor:pointer; }
   #dag .node rect { fill:#fff; stroke:var(--line); }
   #dag .node.input rect { fill:var(--amber); stroke:var(--amber2); }
+  #dag .node.datain rect { fill:#eef7f0; stroke:#cbe6d3; }
   #dag .node.solve rect { fill:#f3e8fd; stroke:#e2cdfa; }
   #dag .node.assert.pass rect { fill:var(--okbg); stroke:#bfe3cb; }
   #dag .node.assert.fail rect { fill:var(--badbg); stroke:#f0c1bf; }
@@ -813,7 +814,7 @@ async function loadModel(what) {
       renderHl();
       return;
     }
-    const miss = /include "([^"]+)" is not loaded/.exec(r.error || "");
+    const miss = /(?:include|data file) "([^"]+)" is not loaded/.exec(r.error || "");
     if (!miss) {
       lastErrors = r.errors || [];
       setErr(r.error + "   (grid shows the last valid model)");
@@ -824,7 +825,7 @@ async function loadModel(what) {
     }
     const resp = await fetch(miss[1] + "?v=" + Date.now());
     if (!resp.ok) {
-      setErr(`cannot fetch include "${miss[1]}" (HTTP ${resp.status})`);
+      setErr(`cannot fetch "${miss[1]}" (HTTP ${resp.status})`);
       loadedOk = false;
       return;
     }
@@ -881,7 +882,7 @@ function dagSvg(info) {
   M.forEach(m => d(m.name));
   let maxD = Math.max(0, ...M.map(m => depth[m.name]));
   const nodes = M.map(m => ({ id: m.name, m, d: depth[m.name],
-    kind: m.input ? "input" : m.solve ? "solve" : "calc", refs: m.refs }));
+    kind: m.data ? "datain" : m.input ? "input" : m.solve ? "solve" : "calc", refs: m.refs }));
   if (info.asserts.length) {
     maxD += 1;
     for (const a of info.asserts) nodes.push({ id: a.name, d: maxD, kind: "assert", refs: a.refs });
@@ -914,7 +915,8 @@ function dagSvg(info) {
     const p = pos[n.id];
     const cls = n.kind + (n.kind === "assert" ? (passMap[n.id] === false ? " fail" : " pass") : "");
     const sub = n.kind === "assert" ? "assert"
-      : [n.m.unit, n.m.solve ? "solve" : "", n.m.dist ? "~dist" : ""].filter(Boolean).join(" · ");
+      : [n.m.unit, n.m.solve ? "solve" : "", n.m.dist ? "~dist" : "",
+         n.m.data ? "data" : ""].filter(Boolean).join(" · ");
     nds += `<g class="node ${cls}" data-n="${escM(n.id)}" transform="translate(${p.x},${p.y})">
       <rect width="${p.w}" height="${rowH}" rx="7"/>
       <text x="${padX}" y="13">${escM(n.id)}</text>
@@ -936,13 +938,14 @@ function showNodeDetail(info, name) {
     ? [m.input ? "input" : "computed", m.series ? "series" : "scalar",
        m.solve ? "solve member" : "", m.dist ? "stochastic" : "",
        m.round !== null && m.round !== undefined ? `round ${m.round}` : "",
-       m.editable ? "literal-editable" : ""].filter(Boolean)
+       m.editable ? "literal-editable" : "",
+       m.data ? "external data — read-only, changes by re-import" : ""].filter(Boolean)
     : ["assert"];
   el.innerHTML = `<div class="box"><b class="nm">${escM(name)}</b>
     ${m ? `<span class="chip">${escM(m.unit)}</span>` : ""}
     ${m && m.dims.length ? `<span class="chip">over ${m.dims.map(escM).join(", ")}</span>` : ""}
     ${tags.map(t => `<span class="chip">${escM(t)}</span>`).join("")}
-    <div class="mnote">defined in <a href="#" class="mdef" data-file="${escM(o.file)}" data-line="${o.line}">${escM(fileDisp(o.file))}:${o.line}</a></div>
+    <div class="mnote">defined in <a href="#" class="mdef" data-file="${escM(o.file)}" data-line="${o.line}">${escM(fileDisp(o.file))}:${o.line}</a>${m && m.data ? ` · facts from <b>${escM(m.data)}</b>` : ""}</div>
     <div class="mnote"><b>built from</b> — ${links(m ? m.refs : a.refs)}</div>
     ${m ? `<div class="mnote"><b>feeds into</b> — ${links(m.dependents)}</div>` : ""}</div>`;
   el.querySelectorAll(".mgoto").forEach(x => x.addEventListener("click", e => {
