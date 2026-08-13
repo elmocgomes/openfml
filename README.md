@@ -665,6 +665,29 @@ The scheduler generalizes to the (measure × member × period) micro-graph.
   `tests/data.rs`: binding, structural non-editability, the pin, the
   host-retry error contract, coverage errors, and re-import ≡ fresh
   compile (the equivalence theorem, as ever).
+- **User defs — the extension mechanism (slice 20)** — `def name(p : $C
+  flow, r : rate, h : range) -> $C = expr`. The language grows the way
+  the compiler always grew (allocate, actuals, data are all desugars):
+  calls EXPAND into the small total core before checking, so units,
+  provenance, incremental evaluation, simulate, tornado and goal-seek
+  reach through user abstractions with no new engine machinery — the
+  inspector still shows the ORIGINAL call as the formula (the CST keeps
+  the source) while contribution terms decompose the expanded graph
+  (a DCF cell explains as exact per-period PV terms). Defs are CLOSED,
+  fully-annotated, typed abstractions: `$X` unit VARIABLES are checked
+  at the definition site with skolem units (the body is compiled once
+  against fresh opaque units — sound there ⇒ sound for every
+  instantiation, Kennedy-style parametricity on the cheap), the def
+  call graph must be a DAG (recursion in time is `prev`, circularity is
+  `solve`), and NAME positions (prev, range names, series indexing)
+  require bare-name arguments. The standard library is fml itself:
+  `finance.fml` ships `dcf`, `gordon_tv` and `wacc` as readable,
+  auditable source pulled in by ordinary `include` — ACME now carries a
+  valuation block (`dcf_value`, `terminal_value`) built from it.
+  `tests/defs.rs` locks the theorem (def call ≡ hand-written expansion,
+  exactly), the skolem rejection, DAG enforcement, arity/name-position
+  errors, provenance through defs, and goal-seek inverting THROUGH a
+  def (recovering the discount rate from a target valuation).
 - Still ahead — per-declaration unit-inference/scheduling queries,
   integer minor-unit representation, read-side information-flow
   control, TLS / reverse-proxy deployment.

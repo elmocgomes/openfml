@@ -21,6 +21,7 @@ use std::rc::Rc;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SyntaxKind {
     StrLit,
+    DefDecl,
     // Tokens.
     Whitespace,
     Comment,
@@ -74,6 +75,7 @@ fn tag_kind(tag: &str) -> SyntaxKind {
         "eliminate" => SyntaxKind::EliminateDecl,
         "correlate" => SyntaxKind::CorrelateDecl,
         "allocate" => SyntaxKind::AllocateDecl,
+        "def" => SyntaxKind::DefDecl,
         "error" => SyntaxKind::ErrorDecl,
         _ => SyntaxKind::MeasureDecl,
     }
@@ -233,6 +235,7 @@ pub fn decl_name(n: &GreenNode) -> Option<String> {
         | SyntaxKind::SolveDecl
         | SyntaxKind::AssertDecl
         | SyntaxKind::ScenarioDecl
+        | SyntaxKind::DefDecl
         | SyntaxKind::EliminateDecl => idents.nth(1),
         _ => None,
     }

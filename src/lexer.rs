@@ -154,11 +154,19 @@ pub fn lex_full(src: &str) -> Result<Vec<SpannedTok>, String> {
                     emit!(Tok::Num(n));
                 }
             }
-            c if c.is_alphabetic() || c == '_' => {
+            c if c.is_alphabetic() || c == '_' || c == '$' => {
+                // `$C` — a unit variable in def signatures.
                 let mut text = String::new();
+                if c == '$' {
+                    text.push('$');
+                    i += 1;
+                }
                 while i < chars.len() && (chars[i].is_alphanumeric() || chars[i] == '_') {
                     text.push(chars[i]);
                     i += 1;
+                }
+                if text == "$" {
+                    return Err(format!("line {line}: '$' must be followed by a unit-variable name"));
                 }
                 emit!(Tok::Ident(text));
             }

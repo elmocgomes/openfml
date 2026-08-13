@@ -332,6 +332,7 @@ pub extern "C" fn fml_load() -> i32 {
                 if sal.errors.is_empty() && sal.dropped.is_empty() {
                     return Err(String::new()); // nothing to salvage around
                 }
+                crate::expand_defs(&mut sal.model)?;
                 crate::bind_data(&mut sal.model, &mut data_resolver, &mut Vec::new())?;
                 let mut s = Session::from_model_parts(
                     &sal.model,

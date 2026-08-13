@@ -52,7 +52,8 @@ pub fn keywords() -> &'static [&'static str] {
 }
 
 const DIMLESS_ALIASES: [&str; 2] = ["rate", "ratio"];
-const KEYWORDS: [&str; 34] = [
+const KEYWORDS: [&str; 35] = [
+    "def",
     "model", "calendar", "currency", "unit", "input", "solve", "assert", "period",
     "over", "init", "tolerance", "max_iterations", "prev", "relax", "when", "match", "in",
     "dimension", "functional", "at", "eliminate", "against", "scenario", "from", "actuals", "until", "metalog", "uniform", "normal", "correlate", "per", "allocate", "by", "round",
@@ -269,6 +270,82 @@ impl Parser {
     }
 
     /// `2026`, `2026-Q3`, or `2026-07` (only in period contexts).
+    /// `def name(p [: $C [flow|stock] | rate | ratio | 1 | range], …)
+    ///  [-> $C | rate | …] = expr` — a user abstraction; calls expand
+    /// into the core before checking.
+    fn def_decl(&mut self) -> Result<crate::ast::DefDecl, String> {
+        use crate::ast::DefAnn;
+        let line = self.line();
+        self.pos += 1; // 'def'
+        let name = self.expect_ident()?;
+        if KEYWORDS.contains(&name.as_str()) {
+            return Err(format!("line {line}: '{name}' is a keyword and cannot name a def"));
+        }
+        let mut ann = |p: &mut Parser| -> Result<Option<DefAnn>, String> {
+            let spec = match p.peek() {
+                Some(Tok::Ident(s)) if s.starts_with('$') => {
+                    let v = s.clone();
+                    p.pos += 1;
+                    let kind = match p.peek_ident() {
+                        Some("flow") => {
+                            p.pos += 1;
+                            Some(crate::ast::Kind::Flow)
+                        }
+                        Some("stock") => {
+                            p.pos += 1;
+                            Some(crate::ast::Kind::Stock)
+                        }
+                        _ => None,
+                    };
+                    DefAnn::Var(v, kind)
+                }
+                Some(Tok::Ident(s)) if s == "rate" || s == "ratio" => {
+                    p.pos += 1;
+                    DefAnn::Dimensionless
+                }
+                Some(Tok::Num(n)) if *n == 1.0 => {
+                    p.pos += 1;
+                    DefAnn::Dimensionless
+                }
+                Some(Tok::Ident(s)) if s == "range" => {
+                    p.pos += 1;
+                    DefAnn::Range
+                }
+                _ => {
+                    return Err(format!(
+                        "line {}: def annotations are '$X [flow|stock]', 'rate', 'ratio', '1' or 'range'",
+                        p.line()
+                    ))
+                }
+            };
+            Ok(Some(spec))
+        };
+        self.expect_sym("(")?;
+        let mut params = Vec::new();
+        loop {
+            let pname = self.expect_ident()?;
+            let pann = if self.eat_sym(":") { ann(self)? } else { None };
+            params.push((pname, pann));
+            if !self.eat_sym(",") {
+                break;
+            }
+        }
+        self.expect_sym(")")?;
+        let ret = if self.eat_sym("->") { ann(self)? } else { None };
+        // Defs are CLOSED, typed abstractions: full annotations are what
+        // makes the definition-site skolem check possible for every def.
+        if ret.is_none() || params.iter().any(|(_, a)| a.is_none()) {
+            return Err(format!(
+                "line {line}: def '{name}' needs full annotations — every parameter and the \
+                 return: '$X [flow|stock]', 'rate', 'ratio', '1' or 'range'"
+            ));
+        }
+        self.expect_sym("=")?;
+        let body = self.expr()?;
+        self.site_buf.clear(); // literals inside defs are NOT edit sites
+        Ok(crate::ast::DefDecl { name, params, ret, body, line })
+    }
+
     fn expect_str(&mut self) -> Result<String, String> {
         match self.bump() {
             Some(Tok::Str(s)) => Ok(s),
@@ -331,6 +408,7 @@ impl Parser {
             currency: None,
             units: Vec::new(),
             items: Vec::new(),
+            defs: Vec::new(),
             scenarios: Vec::new(),
             edit_sites: Vec::new(),
             correlations: Vec::new(),
@@ -352,6 +430,7 @@ impl Parser {
                 Some("eliminate") => "eliminate",
                 Some("correlate") => "correlate",
                 Some("allocate") => "allocate",
+                Some("def") => "def",
                 _ => "measure",
             };
             let r = (|| -> Result<(), String> {
@@ -374,6 +453,10 @@ impl Parser {
                     let start = self.period_lit()?;
                     let end = if self.eat_sym("..") { self.period_lit()? } else { start };
                     model.period_ranges.push(PeriodDecl { name: pname, start, end });
+                }
+                Some("def") => {
+                    let d = self.def_decl()?;
+                    model.defs.push(d);
                 }
                 Some("dimension") => {
                     self.pos += 1;
@@ -1255,10 +1338,15 @@ impl Parser {
                     }
                     _ => {
                         if matches!(self.peek(), Some(Tok::Sym("("))) {
-                            return Err(format!(
-                                "line {}: unknown function '{name}' (builtins: prev, min, max, sum, npv, irr, annualize, year)",
-                                self.line()
-                            ));
+                            // A user def call — resolved (and expanded) by
+                            // expand_defs; unknown names error there.
+                            self.pos += 1; // '('
+                            let mut args = vec![self.expr()?];
+                            while self.eat_sym(",") {
+                                args.push(self.expr()?);
+                            }
+                            self.expect_sym(")")?;
+                            return Ok(Expr::Call(name, args));
                         }
                         if matches!(self.peek(), Some(Tok::Sym("["))) {
                             self.pos += 1;

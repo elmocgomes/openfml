@@ -38,6 +38,7 @@ fn main() -> ExitCode {
     // then check — the CLI equivalent of compile() with a live resolver.
     let checked = match (|| -> Result<_, String> {
         let mut model = fml::Parser::parse(&src)?;
+        fml::expand_defs(&mut model)?;
         fml::bind_data(
             &mut model,
             &mut |f| {

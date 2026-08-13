@@ -387,6 +387,7 @@ impl Session {
         resolve: &mut dyn FnMut(&str) -> Result<String, String>,
     ) -> Result<Session, String> {
         let mut model = crate::parser::Parser::parse(&src)?;
+        crate::expand_defs(&mut model)?;
         let mut store = Vec::new();
         crate::bind_data(&mut model, resolve, &mut store)?;
         let checked = crate::check(&model)?;
@@ -664,6 +665,7 @@ impl Session {
         }
         // One parse serves both the analysis and the references query.
         let mut model = crate::Parser::parse(&exp.flat)?;
+        crate::expand_defs(&mut model)?;
         // The fact plane binds from the STORED tables — reload(exp) keeps
         // facts fixed; changed facts go through reload_resolve.
         let stored = self.data_files.clone();
@@ -842,6 +844,7 @@ impl Session {
         resolve: &mut dyn FnMut(&str) -> Result<String, String>,
     ) -> Result<ReloadStats, String> {
         let mut model = crate::Parser::parse(&exp.flat)?;
+        crate::expand_defs(&mut model)?;
         let mut store = Vec::new();
         crate::bind_data(&mut model, resolve, &mut store)?;
         if store == self.data_files {
@@ -2223,6 +2226,7 @@ impl Session {
             let Some(name) = decl_name(d.green) else { continue };
             let kind = match d.green.kind {
                 SyntaxKind::InputDecl => "input",
+                SyntaxKind::DefDecl => "def",
                 SyntaxKind::MeasureDecl => "measure",
                 SyntaxKind::AllocateDecl => "allocate",
                 SyntaxKind::SolveDecl => "solve",

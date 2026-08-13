@@ -266,6 +266,34 @@ pub enum Item {
     Assert(AssertDecl),
 }
 
+/// `def name(param [: spec], …) [-> spec] = expr` — a user abstraction.
+/// Calls EXPAND into the core before checking (hygienic substitution),
+/// so units, provenance, incrementality, simulate and goal-seek apply to
+/// the expanded graph unchanged. Non-recursive by construction (the def
+/// call graph must be a DAG).
+#[derive(Clone, Debug)]
+pub struct DefDecl {
+    pub name: String,
+    /// (param name, annotation). Annotations drive the DEFINITION-SITE
+    /// unit check (skolem units for `$X` variables); un-annotated defs
+    /// are checked only at call sites.
+    pub params: Vec<(String, Option<DefAnn>)>,
+    pub ret: Option<DefAnn>,
+    pub body: Expr,
+    pub line: usize,
+}
+
+/// A def parameter/return annotation.
+#[derive(Clone, Debug, PartialEq)]
+pub enum DefAnn {
+    /// `$C [flow|stock]` — a unit VARIABLE; series when a kind is given.
+    Var(String, Option<Kind>),
+    /// `rate` | `ratio` | `1` — dimensionless scalar.
+    Dimensionless,
+    /// `range` — a period-range/calendar name (substituted by name).
+    Range,
+}
+
 #[derive(Clone, Debug)]
 pub struct CalendarDecl {
     pub name: String,
@@ -348,6 +376,7 @@ pub struct Model {
     pub currency: Option<String>,
     pub units: Vec<UnitDecl>,
     pub items: Vec<Item>,
+    pub defs: Vec<DefDecl>,
     pub scenarios: Vec<ScenarioDecl>,
     pub edit_sites: Vec<EditSite>,
     /// `correlate a, b = rho` — rank-preserving dependence between two

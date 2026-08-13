@@ -11,6 +11,7 @@ include "sales_plan.fml"
 include "production_plan.fml"
 include "hr_plan.fml"
 include "maintenance_plan.fml"
+include "finance.fml"
 
 // ---- revenue ------------------------------------------------------------
 revenue : kEUR flow over Line, q = volume * price
@@ -40,6 +41,15 @@ asset_base : kEUR stock over q init: 12_000 = prev(asset_base) + capex - depreci
 ebitda : kEUR flow over q = gross_margin - plant_overhead - maintenance_spend - admin_cost
 ebit : kEUR flow over q = ebitda - depreciation
 fy_ebitda : kEUR = sum[q](ebitda)
+
+// ---- valuation (finance) --------------------------------------------
+// The finance vocabulary comes from finance.fml — defs that EXPAND into
+// the core, so explain/tornado/goal-seek reach through dcf() unchanged.
+input discount_q : rate = 2.2%
+input tv_growth_q : rate = 0.5%
+free_cash : kEUR flow over q = ebitda - capex
+dcf_value : kEUR = dcf(free_cash, discount_q, q)
+terminal_value : kEUR = gordon_tv(free_cash[q.end], discount_q, tv_growth_q)
 
 // ---- covenants ----------------------------------------------------------
 assert margin_floor over q : ebitda >= total_revenue * 12%

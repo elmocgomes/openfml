@@ -1,0 +1,16 @@
+// finance.fml — the standard finance vocabulary, written IN fml.
+// Defs expand into the core before checking: units stay proven
+// ($C is a unit variable — kEUR in, kEUR out), provenance stays
+// exact, and simulate/tornado/goal-seek work through them unchanged.
+
+// Discounted cash flow: present value of a flow over a range.
+def dcf(cash : $C flow, rate : rate, horizon : range) -> $C =
+  npv(rate, cash over horizon)
+
+// Gordon terminal value on a final-period flow.
+def gordon_tv(final_cash : $C, rate : rate, g : rate) -> $C =
+  final_cash * (1 + g) / (rate - g)
+
+// Weighted average cost of capital.
+def wacc(equity : $C, debt : $C, re : rate, rd : rate, tax : rate) -> rate =
+  (equity * re + debt * rd * (1 - tax)) / (equity + debt)

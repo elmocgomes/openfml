@@ -254,6 +254,468 @@ pub fn parse_salvage(src: &str) -> Result<Salvaged, String> {
     Ok(Salvaged { model, errors, dropped })
 }
 
+/// Expand user defs: every `Call` to a def inlines its body (hygienic
+/// parameter substitution) until only core expressions remain — the same
+/// growth-by-desugaring the built-ins use, promoted to users. Runs BEFORE
+/// checking, so units, provenance, incremental evaluation, simulate and
+/// goal-seek see the expanded graph and need no new machinery. The def
+/// call graph must be a DAG (no recursion — time recursion is `prev`,
+/// circularity is `solve`). Fully-annotated defs are additionally checked
+/// at DEFINITION site with skolem units: the body is compiled once
+/// against fresh opaque units standing in for each `$X`, so a def that is
+/// unit-sound there is sound for every instantiation.
+pub fn expand_defs(model: &mut ast::Model) -> Result<(), String> {
+    use ast::{DefAnn, DefDecl, Expr};
+    use std::collections::HashMap;
+    let defs: HashMap<String, DefDecl> =
+        model.defs.iter().map(|d| (d.name.clone(), d.clone())).collect();
+
+    // ---- the def call graph must be a DAG --------------------------------
+    fn calls_in(e: &Expr, out: &mut Vec<String>) {
+        if let Expr::Call(n, _) = e {
+            if n != "min" && n != "max" {
+                out.push(n.clone());
+            }
+        }
+        match e {
+            Expr::Neg(a) | Expr::Annualize(a) => calls_in(a, out),
+            Expr::Bin(_, a, b) => {
+                calls_in(a, out);
+                calls_in(b, out);
+            }
+            Expr::Call(_, args) => {
+                for a in args {
+                    calls_in(a, out);
+                }
+            }
+            Expr::Prev(_, Some(i)) => calls_in(i, out),
+            Expr::When { value, .. } => calls_in(value, out),
+            Expr::MatchT(arms) => arms.iter().for_each(|(_, a)| calls_in(a, out)),
+            Expr::MatchDim { arms, default, .. } => {
+                arms.iter().for_each(|(_, a)| calls_in(a, out));
+                if let Some(d) = default {
+                    calls_in(d, out);
+                }
+            }
+            Expr::Conv { body, rate, .. } => {
+                calls_in(body, out);
+                if let Some(r) = rate {
+                    calls_in(r, out);
+                }
+            }
+            Expr::RangeSum { body, .. } => calls_in(body, out),
+            Expr::Npv { rate, body, .. } => {
+                calls_in(rate, out);
+                calls_in(body, out);
+            }
+            Expr::AllocShare { total, driver, .. } => {
+                calls_in(total, out);
+                calls_in(driver, out);
+            }
+            _ => {}
+        }
+    }
+    // Depth-first cycle check over def→def edges.
+    fn dag(
+        name: &str,
+        defs: &HashMap<String, DefDecl>,
+        state: &mut HashMap<String, u8>, // 1 = on stack, 2 = done
+    ) -> Result<(), String> {
+        match state.get(name) {
+            Some(1) => return Err(format!("def '{name}' is recursive — the def call graph must be a DAG (use prev/solve for recursion in time or fixpoints)")),
+            Some(2) => return Ok(()),
+            _ => {}
+        }
+        state.insert(name.to_string(), 1);
+        let mut callees = Vec::new();
+        if let Some(d) = defs.get(name) {
+            calls_in(&d.body, &mut callees);
+        }
+        for c in callees {
+            if defs.contains_key(&c) {
+                dag(&c, defs, state)?;
+            }
+        }
+        state.insert(name.to_string(), 2);
+        Ok(())
+    }
+    let mut state = HashMap::new();
+    for name in defs.keys() {
+        dag(name, &defs, &mut state)?;
+    }
+
+    // ---- substitution ----------------------------------------------------
+    // Value positions take the argument expression; NAME positions (prev,
+    // range names, series indexing) require the argument to be a bare name.
+    fn name_of(env: &HashMap<String, Expr>, n: &str, ctx: &str) -> Result<String, String> {
+        match env.get(n) {
+            None => Ok(n.to_string()),
+            Some(Expr::Ref(m)) => Ok(m.clone()),
+            Some(_) => Err(format!(
+                "def parameter '{n}' is used as a {ctx} name — pass a bare name for it"
+            )),
+        }
+    }
+    fn subst(e: &Expr, env: &HashMap<String, Expr>) -> Result<Expr, String> {
+        Ok(match e {
+            Expr::Ref(n) => env.get(n).cloned().unwrap_or_else(|| e.clone()),
+            Expr::Prev(n, init) => Expr::Prev(
+                name_of(env, n, "prev() measure")?,
+                init.as_ref().map(|i| subst(i, env).map(Box::new)).transpose()?,
+            ),
+            Expr::Neg(a) => Expr::Neg(Box::new(subst(a, env)?)),
+            Expr::Annualize(a) => Expr::Annualize(Box::new(subst(a, env)?)),
+            Expr::Bin(op, a, b) => {
+                Expr::Bin(*op, Box::new(subst(a, env)?), Box::new(subst(b, env)?))
+            }
+            Expr::Call(n, args) => Expr::Call(
+                n.clone(),
+                args.iter().map(|a| subst(a, env)).collect::<Result<_, _>>()?,
+            ),
+            Expr::When { value, pos, range } => Expr::When {
+                value: Box::new(subst(value, env)?),
+                pos: *pos,
+                range: name_of(env, range, "range")?,
+            },
+            Expr::MatchT(arms) => Expr::MatchT(
+                arms.iter()
+                    .map(|(r, a)| {
+                        Ok((
+                            ast::RangeSetRef {
+                                base: name_of(env, &r.base, "range")?,
+                                minus: r
+                                    .minus
+                                    .as_ref()
+                                    .map(|m| name_of(env, m, "range"))
+                                    .transpose()?,
+                            },
+                            subst(a, env)?,
+                        ))
+                    })
+                    .collect::<Result<Vec<_>, String>>()?,
+            ),
+            Expr::MatchDim { dim, arms, default } => Expr::MatchDim {
+                dim: dim.clone(),
+                arms: arms
+                    .iter()
+                    .map(|(m, a)| Ok((m.clone(), subst(a, env)?)))
+                    .collect::<Result<Vec<_>, String>>()?,
+                default: default
+                    .as_ref()
+                    .map(|d| subst(d, env).map(Box::new))
+                    .transpose()?,
+            },
+            Expr::MemberIx { name, members } => Expr::MemberIx {
+                name: name_of(env, name, "measure")?,
+                members: members.clone(),
+            },
+            Expr::Conv { body, target, rate } => Expr::Conv {
+                body: Box::new(subst(body, env)?),
+                target: target.clone(),
+                rate: rate.as_ref().map(|r| subst(r, env).map(Box::new)).transpose()?,
+            },
+            Expr::WindowSum { name, from, to } => Expr::WindowSum {
+                name: name_of(env, name, "measure")?,
+                from: from.clone(),
+                to: to.clone(),
+            },
+            Expr::RangeSum { range, body } => Expr::RangeSum {
+                range: name_of(env, range, "range")?,
+                body: Box::new(subst(body, env)?),
+            },
+            Expr::Npv { rate, body, range } => Expr::Npv {
+                rate: Box::new(subst(rate, env)?),
+                body: Box::new(subst(body, env)?),
+                range: name_of(env, range, "range")?,
+            },
+            Expr::At { name, bound } => Expr::At {
+                name: name_of(env, name, "measure")?,
+                bound: bound.clone(),
+            },
+            Expr::Irr { calendar, name } => Expr::Irr {
+                calendar: name_of(env, calendar, "calendar")?,
+                name: name_of(env, name, "measure")?,
+            },
+            Expr::AllocShare { total, driver, dim, dp, policy } => Expr::AllocShare {
+                total: Box::new(subst(total, env)?),
+                driver: Box::new(subst(driver, env)?),
+                dim: dim.clone(),
+                dp: *dp,
+                policy: *policy,
+            },
+            Expr::Num(_) | Expr::Qty(_, _) | Expr::Pct(_) | Expr::YearT => e.clone(),
+        })
+    }
+
+    // ---- expansion -------------------------------------------------------
+    fn xexpr(e: &Expr, defs: &HashMap<String, DefDecl>) -> Result<Expr, String> {
+        // Recurse into children first, then inline calls bottom-up.
+        let e = subst(e, &HashMap::new())?; // cheap structural clone via subst
+        let rec = |c: &Expr| xexpr(c, defs);
+        Ok(match &e {
+            Expr::Call(name, args) if name != "min" && name != "max" => {
+                let d = defs.get(name).ok_or_else(|| {
+                    format!(
+                        "unknown function '{name}' — defs in scope: {}; builtins: prev, min, max, sum, npv, irr, annualize, year",
+                        if defs.is_empty() { "(none)".to_string() } else { defs.keys().cloned().collect::<Vec<_>>().join(", ") }
+                    )
+                })?;
+                if d.params.len() != args.len() {
+                    return Err(format!(
+                        "def '{name}' takes {} argument{}, got {}",
+                        d.params.len(),
+                        if d.params.len() == 1 { "" } else { "s" },
+                        args.len()
+                    ));
+                }
+                let xargs: Vec<Expr> = args.iter().map(rec).collect::<Result<_, _>>()?;
+                let env: HashMap<String, Expr> = d
+                    .params
+                    .iter()
+                    .zip(xargs)
+                    .map(|((p, _), a)| (p.clone(), a))
+                    .collect();
+                let body = subst(&d.body, &env)
+                    .map_err(|er| format!("in def '{name}' (line {}): {er}", d.line))?;
+                xexpr(&body, defs)?
+            }
+            Expr::Call(name, args) => {
+                Expr::Call(name.clone(), args.iter().map(rec).collect::<Result<_, _>>()?)
+            }
+            Expr::Neg(a) => Expr::Neg(Box::new(rec(a)?)),
+            Expr::Annualize(a) => Expr::Annualize(Box::new(rec(a)?)),
+            Expr::Bin(op, a, b) => Expr::Bin(*op, Box::new(rec(a)?), Box::new(rec(b)?)),
+            Expr::Prev(n, init) => Expr::Prev(
+                n.clone(),
+                init.as_ref().map(|i| rec(i).map(Box::new)).transpose()?,
+            ),
+            Expr::When { value, pos, range } => Expr::When {
+                value: Box::new(rec(value)?),
+                pos: *pos,
+                range: range.clone(),
+            },
+            Expr::MatchT(arms) => Expr::MatchT(
+                arms.iter()
+                    .map(|(r, a)| Ok((r.clone(), rec(a)?)))
+                    .collect::<Result<Vec<_>, String>>()?,
+            ),
+            Expr::MatchDim { dim, arms, default } => Expr::MatchDim {
+                dim: dim.clone(),
+                arms: arms
+                    .iter()
+                    .map(|(m, a)| Ok((m.clone(), rec(a)?)))
+                    .collect::<Result<Vec<_>, String>>()?,
+                default: default.as_ref().map(|d| rec(d).map(Box::new)).transpose()?,
+            },
+            Expr::Conv { body, target, rate } => Expr::Conv {
+                body: Box::new(rec(body)?),
+                target: target.clone(),
+                rate: rate.as_ref().map(|r| rec(r).map(Box::new)).transpose()?,
+            },
+            Expr::RangeSum { range, body } => Expr::RangeSum {
+                range: range.clone(),
+                body: Box::new(rec(body)?),
+            },
+            Expr::Npv { rate, body, range } => Expr::Npv {
+                rate: Box::new(rec(rate)?),
+                body: Box::new(rec(body)?),
+                range: range.clone(),
+            },
+            Expr::AllocShare { total, driver, dim, dp, policy } => Expr::AllocShare {
+                total: Box::new(rec(total)?),
+                driver: Box::new(rec(driver)?),
+                dim: dim.clone(),
+                dp: *dp,
+                policy: *policy,
+            },
+            _ => e.clone(),
+        })
+    }
+    fn xbody(b: &mut ast::Body, defs: &HashMap<String, DefDecl>) -> Result<(), String> {
+        match b {
+            ast::Body::Expr(e) => *e = xexpr(e, defs)?,
+            ast::Body::Map(entries) => {
+                for (_, e) in entries {
+                    *e = xexpr(e, defs)?;
+                }
+            }
+            ast::Body::DimMatch { arms, default, .. } => {
+                for (_, a) in arms {
+                    xbody(a, defs)?;
+                }
+                if let Some(d) = default {
+                    xbody(d, defs)?;
+                }
+            }
+            ast::Body::Data { .. } => {}
+        }
+        Ok(())
+    }
+
+    // ---- definition-site unit soundness (skolem units) --------------------
+    for d in defs.values() {
+        let all_annotated =
+            d.params.iter().all(|(_, a)| a.is_some()) && d.ret.is_some();
+        if !all_annotated {
+            continue;
+        }
+        let mut unit_vars: Vec<String> = Vec::new();
+        let mut units = Vec::new();
+        let skolem = |v: &str, unit_vars: &mut Vec<String>| -> String {
+            if let Some(k) = unit_vars.iter().position(|x| x == v) {
+                format!("__u{k}")
+            } else {
+                unit_vars.push(v.to_string());
+                format!("__u{}", unit_vars.len() - 1)
+            }
+        };
+        let mut items = Vec::new();
+        let mut env: HashMap<String, Expr> = HashMap::new();
+        for (p, ann) in &d.params {
+            match ann.as_ref().unwrap() {
+                DefAnn::Var(v, kind) => {
+                    let u = skolem(v, &mut unit_vars);
+                    items.push(ast::Item::Measure(ast::MeasureDecl {
+                        name: p.clone(),
+                        is_input: true,
+                        ann: ast::TypeAnn {
+                            unit: Some(ast::UnitAst { num: u, den: None }),
+                            kind: *kind,
+                        },
+                        over: if kind.is_some() { vec!["__c".into()] } else { vec![] },
+                        init: None,
+                        round: None,
+                        body: ast::Body::Expr(Expr::Num(1.0)),
+                        dist: None,
+                        data_src: None,
+                        line: d.line,
+                    }));
+                }
+                DefAnn::Dimensionless => {
+                    items.push(ast::Item::Measure(ast::MeasureDecl {
+                        name: p.clone(),
+                        is_input: true,
+                        ann: ast::TypeAnn {
+                            unit: Some(ast::UnitAst { num: "rate".into(), den: None }),
+                            kind: None,
+                        },
+                        over: vec![],
+                        init: None,
+                        round: None,
+                        body: ast::Body::Expr(Expr::Num(0.1)),
+                        dist: None,
+                        data_src: None,
+                        line: d.line,
+                    }));
+                }
+                DefAnn::Range => {
+                    env.insert(p.clone(), Expr::Ref("__c".into()));
+                }
+            }
+        }
+        for k in 0..unit_vars.len() {
+            units.push(ast::UnitDecl { name: format!("__u{k}"), scaled: None });
+        }
+        let (ret_over, ret_kind) = match d.ret.as_ref().unwrap() {
+            DefAnn::Var(_, k) => (k.is_some(), *k),
+            _ => (false, None),
+        };
+        let body = subst(&d.body, &env)
+            .map_err(|e| format!("def '{}' (line {}): {e}", d.name, d.line))?;
+        items.push(ast::Item::Measure(ast::MeasureDecl {
+            name: "__r".into(),
+            is_input: false,
+            ann: ast::TypeAnn { unit: None, kind: ret_kind },
+            over: if ret_over { vec!["__c".into()] } else { vec![] },
+            init: None,
+            round: None,
+            body: ast::Body::Expr(body),
+            dist: None,
+            data_src: None,
+            line: d.line,
+        }));
+        let mut synth = ast::Model {
+            name: "__defcheck".into(),
+            calendar: Some(ast::CalendarDecl {
+                name: "__c".into(),
+                grain: "yearly".into(),
+                start: calendar::PeriodLit { year: 2026, sub: None, q_form: false },
+                end: calendar::PeriodLit { year: 2029, sub: None, q_form: false },
+            }),
+            period_ranges: Vec::new(),
+            dimensions: Vec::new(),
+            functional: None,
+            currency: None,
+            units,
+            items,
+            defs: model.defs.clone(),
+            scenarios: Vec::new(),
+            edit_sites: Vec::new(),
+            correlations: Vec::new(),
+        };
+        // Expand nested def calls inside the synthetic body, then check.
+        for it in &mut synth.items {
+            if let ast::Item::Measure(m) = it {
+                xbody(&mut m.body, &defs)
+                    .map_err(|e| format!("def '{}' (line {}): {e}", d.name, d.line))?;
+            }
+        }
+        check(&synth).map_err(|e| {
+            format!(
+                "def '{}' (line {}) is not unit-sound for all instantiations \
+                 (defs are closed over their parameters; units are checked \
+                 with skolem units): {e}",
+                d.name, d.line
+            )
+        })?;
+    }
+
+    // ---- expand the model ------------------------------------------------
+    for it in &mut model.items {
+        match it {
+            ast::Item::Measure(m) => {
+                xbody(&mut m.body, &defs)?;
+                if let Some((_, e)) = &mut m.init {
+                    *e = xexpr(e, &defs)?;
+                }
+                if let Some(dist) = &mut m.dist {
+                    for (_, e) in &mut dist.params {
+                        *e = xexpr(e, &defs)?;
+                    }
+                }
+            }
+            ast::Item::Assert(a) => {
+                a.lhs = xexpr(&a.lhs, &defs)?;
+                a.rhs = xexpr(&a.rhs, &defs)?;
+                if let Some(t) = &mut a.tol {
+                    *t = xexpr(t, &defs)?;
+                }
+            }
+            ast::Item::Solve(s) => match &mut s.form {
+                ast::SolveForm::Block(ms) => {
+                    for m in ms {
+                        xbody(&mut m.body, &defs)?;
+                        if let Some((_, e)) = &mut m.init {
+                            *e = xexpr(e, &defs)?;
+                        }
+                    }
+                }
+                ast::SolveForm::Tearing(relaxes) => {
+                    for r in relaxes.iter_mut() {
+                        r.init = xexpr(&r.init, &defs)?;
+                    }
+                }
+            },
+        }
+    }
+    for sc in &mut model.scenarios {
+        for (_, b, _) in &mut sc.overrides {
+            xbody(b, &defs)?;
+        }
+    }
+    Ok(())
+}
+
 /// Bind the fact plane: replace every `= data "file.csv" [sha256 "…"]`
 /// body with the values from its external table, BEFORE checking. The
 /// desugared bodies are ordinary maps/match arms — but built post-parse,
@@ -393,6 +855,7 @@ pub fn bind_data(
 /// Parse + check a source file.
 pub fn compile(src: &str) -> Result<Checked, String> {
     let mut model = Parser::parse(src)?;
+    expand_defs(&mut model)?;
     bind_data(
         &mut model,
         &mut |f| Err(format!("data file \"{f}\" is not loaded")),
