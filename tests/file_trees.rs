@@ -7,13 +7,13 @@ use fml::Session;
 
 fn team_session() -> Session {
     let files = [
-        ("team_marketing.fml", include_str!("../models/team_marketing.fml")),
-        ("team_engineering.fml", include_str!("../models/team_engineering.fml")),
-        ("team_operations.fml", include_str!("../models/team_operations.fml")),
+        ("team_marketing.fml", include_str!("fixtures/team_marketing.fml")),
+        ("team_engineering.fml", include_str!("fixtures/team_engineering.fml")),
+        ("team_operations.fml", include_str!("fixtures/team_operations.fml")),
     ];
     let exp = fml::expand_includes_with_map(
         "team_budget.fml",
-        include_str!("../models/team_budget.fml"),
+        include_str!("fixtures/team_budget.fml"),
         &mut |p| {
             files
                 .iter()

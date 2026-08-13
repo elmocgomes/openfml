@@ -1,0 +1,11 @@
+// Sales — volumes and prices per product line. Owned by the sales dept.
+input volume : t flow over Line, q = match Line {
+  Pipes    -> { 2026-Q1: 11_500, 2026-Q2: 12_000, 2026-Q3: 12_400, 2026-Q4: 12_800 }
+  Valves   -> { 2026-Q1: 3_300,  2026-Q2: 3_500,  2026-Q3: 3_600,  2026-Q4: 3_700 }
+  Fittings -> { 2026-Q1: 4_800,  2026-Q2: 5_000,  2026-Q3: 5_100,  2026-Q4: 5_300 }
+}
+input price : kEUR/t flow over Line, q = match Line {
+  Pipes    -> 1.85
+  Valves   -> 4.2
+  Fittings -> 2.4
+}

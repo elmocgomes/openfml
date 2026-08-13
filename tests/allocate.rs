@@ -74,7 +74,7 @@ fn zero_driver_sum_is_a_runtime_error_naming_the_measure() {
 #[test]
 fn allocation_composes_with_the_budget_model() {
     // budget.fml: overhead 300 by headcount {12, 45, 18} (Σ=75).
-    let mut s = Session::new(include_str!("../models/budget.fml")).unwrap();
+    let mut s = Session::new(include_str!("fixtures/budget.fml")).unwrap();
     s.run_full().unwrap();
     assert_eq!(s.get("overhead_share", Some("Marketing"), Some(0)).unwrap(), 300.0 * 12.0 / 75.0);
     assert_eq!(s.get("overhead_share", Some("Engineering"), Some(0)).unwrap(), 180.0);
@@ -91,7 +91,7 @@ fn allocation_composes_with_the_budget_model() {
 
 #[test]
 fn explain_shows_the_allocation_basis() {
-    let mut s = Session::new(include_str!("../models/budget.fml")).unwrap();
+    let mut s = Session::new(include_str!("fixtures/budget.fml")).unwrap();
     s.run_full().unwrap();
     let ex = s.explain("overhead_share", Some("Marketing"), Some(0)).unwrap();
     let names: Vec<(&str, &str)> = ex.deps.iter().map(|d| (d.name.as_str(), d.via.as_str())).collect();

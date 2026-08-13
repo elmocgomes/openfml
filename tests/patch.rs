@@ -4,7 +4,7 @@
 
 use fml::Session;
 
-const FINPLAN: &str = include_str!("../models/finplan.fml");
+const FINPLAN: &str = include_str!("fixtures/finplan.fml");
 
 #[test]
 fn patch_roundtrip_equals_fresh_compile() {
@@ -80,7 +80,7 @@ fn broadcast_literal_patch_changes_all_periods() {
 
 #[test]
 fn formula_inputs_are_not_literal_editable() {
-    let solar = include_str!("../models/solar_pf.fml");
+    let solar = include_str!("fixtures/solar_pf.fml");
     let mut s = Session::new(solar).unwrap();
     s.run_full().unwrap();
     // production is formula-defined: 32_000 * (1 - 0.5%)^(...)

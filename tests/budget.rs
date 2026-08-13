@@ -3,7 +3,7 @@
 
 use fml::Session;
 
-const BUDGET: &str = include_str!("../models/budget.fml");
+const BUDGET: &str = include_str!("fixtures/budget.fml");
 
 #[test]
 fn member_patch_edits_only_that_arm() {

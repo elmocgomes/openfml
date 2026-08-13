@@ -654,5 +654,6 @@ The scheduler generalizes to the (measure × member × period) micro-graph.
 | `src/units.rs` | abelian-group units |
 | `src/check.rs` | resolution, series/unit inference, init/kind rules, cycle analysis, scheduling |
 | `src/eval.rs` | reference evaluator (correct before fast) |
-| `models/` | golden models in `.fml` |
+| `models/acme/` | THE example: the ACME Industrial corporate budget (5 files, one per department) |
+| `tests/fixtures/` | golden models backing the test suite (finplan, solar PF, FX consolidation, …) |
 | `tests/` | golden + negative tests |

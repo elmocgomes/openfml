@@ -58,7 +58,7 @@ fn the_cst_exists_and_reprints_even_for_broken_files() {
 fn fragment_files_without_a_header_get_a_cst() {
     // A team-owned include fragment: no `model` line, units declared in
     // the master file — slice 1 couldn't parse this at all.
-    let frag = include_str!("../models/team_marketing.fml");
+    let frag = include_str!("fixtures/team_marketing.fml");
     let cst = parse_cst(frag).unwrap();
     assert_eq!(cst.text(), frag);
     let (_, _, errors) = Parser::parse_resilient(frag).unwrap();
@@ -105,9 +105,9 @@ fn recovery_works_at_the_first_and_last_declaration() {
 #[test]
 fn intact_files_are_untouched_by_resilient_mode() {
     for src in [
-        include_str!("../models/budget.fml"),
-        include_str!("../models/rolling.fml"),
-        include_str!("../models/finplan.fml"),
+        include_str!("fixtures/budget.fml"),
+        include_str!("fixtures/rolling.fml"),
+        include_str!("fixtures/finplan.fml"),
     ] {
         let (_, _, errors) = Parser::parse_resilient(src).unwrap();
         assert!(errors.is_empty());

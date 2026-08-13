@@ -5,12 +5,12 @@
 use fml::cst::{decl_name, parse_cst, GreenChild, Red, SyntaxKind};
 
 const MODELS: &[(&str, &str)] = &[
-    ("finplan", include_str!("../models/finplan.fml")),
-    ("solar_pf", include_str!("../models/solar_pf.fml")),
-    ("fx_consol", include_str!("../models/fx_consol.fml")),
-    ("budget", include_str!("../models/budget.fml")),
-    ("rolling", include_str!("../models/rolling.fml")),
-    ("team_budget", include_str!("../models/team_budget.fml")),
+    ("finplan", include_str!("fixtures/finplan.fml")),
+    ("solar_pf", include_str!("fixtures/solar_pf.fml")),
+    ("fx_consol", include_str!("fixtures/fx_consol.fml")),
+    ("budget", include_str!("fixtures/budget.fml")),
+    ("rolling", include_str!("fixtures/rolling.fml")),
+    ("team_budget", include_str!("fixtures/team_budget.fml")),
 ];
 
 #[test]
@@ -21,11 +21,11 @@ fn reprint_theorem_over_every_model() {
     }
     // And over the include-EXPANDED multi-file model.
     let files = [
-        ("team_marketing.fml", include_str!("../models/team_marketing.fml")),
-        ("team_engineering.fml", include_str!("../models/team_engineering.fml")),
-        ("team_operations.fml", include_str!("../models/team_operations.fml")),
+        ("team_marketing.fml", include_str!("fixtures/team_marketing.fml")),
+        ("team_engineering.fml", include_str!("fixtures/team_engineering.fml")),
+        ("team_operations.fml", include_str!("fixtures/team_operations.fml")),
     ];
-    let flat = fml::expand_includes(include_str!("../models/team_budget.fml"), &mut |p| {
+    let flat = fml::expand_includes(include_str!("fixtures/team_budget.fml"), &mut |p| {
         files
             .iter()
             .find(|(n, _)| *n == p)
@@ -38,7 +38,7 @@ fn reprint_theorem_over_every_model() {
 
 #[test]
 fn declarations_are_segmented_and_named() {
-    let cst = parse_cst(include_str!("../models/budget.fml")).unwrap();
+    let cst = parse_cst(include_str!("fixtures/budget.fml")).unwrap();
     let root = Red::root(&cst);
     let got: Vec<(SyntaxKind, Option<String>)> =
         root.decls().iter().map(|d| (d.green.kind, decl_name(d.green))).collect();
@@ -71,7 +71,7 @@ fn declarations_are_segmented_and_named() {
 
 #[test]
 fn leading_comments_travel_with_their_declaration() {
-    let src = include_str!("../models/budget.fml");
+    let src = include_str!("fixtures/budget.fml");
     let cst = parse_cst(src).unwrap();
     let root = Red::root(&cst);
     // The overhead block's explanatory comment sits INSIDE the overhead
@@ -89,7 +89,7 @@ fn leading_comments_travel_with_their_declaration() {
 
 #[test]
 fn include_lines_become_directive_nodes() {
-    let cst = parse_cst(include_str!("../models/team_budget.fml")).unwrap();
+    let cst = parse_cst(include_str!("fixtures/team_budget.fml")).unwrap();
     let root = Red::root(&cst);
     let directives: Vec<String> = root
         .decls()
@@ -103,7 +103,7 @@ fn include_lines_become_directive_nodes() {
 
 #[test]
 fn red_offsets_locate_declarations_exactly() {
-    let src = include_str!("../models/budget.fml");
+    let src = include_str!("fixtures/budget.fml");
     let cst = parse_cst(src).unwrap();
     let root = Red::root(&cst);
     let off = src.find("headroom :").unwrap();
@@ -117,7 +117,7 @@ fn red_offsets_locate_declarations_exactly() {
 
 #[test]
 fn structural_edits_are_byte_predictable_and_share_structure() {
-    let src = include_str!("../models/budget.fml");
+    let src = include_str!("fixtures/budget.fml");
     let cst = parse_cst(src).unwrap();
     let root = Red::root(&cst);
     // Find the Squeeze scenario's child index and byte range.

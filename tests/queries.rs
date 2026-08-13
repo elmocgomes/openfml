@@ -14,7 +14,7 @@ fn single(src: &str) -> Expanded {
     }
 }
 
-const BUDGET: &str = include_str!("../models/budget.fml");
+const BUDGET: &str = include_str!("fixtures/budget.fml");
 
 fn assert_equiv(s: &mut Session, src: &str) {
     let mut fresh = Session::new(src).unwrap();
@@ -101,7 +101,7 @@ fn the_references_cache_survives_reloads() {
 #[test]
 fn solve_and_structure_edits_stay_conservative() {
     // Editing a solve block member → full rebuild (no blast radius).
-    let finplan = include_str!("../models/finplan.fml");
+    let finplan = include_str!("fixtures/finplan.fml");
     let mut s = Session::new(finplan).unwrap();
     s.run_full().unwrap();
     let src2 = finplan.replace("input pe          : ratio = 12", "input pe          : ratio = 13");

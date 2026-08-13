@@ -3,7 +3,7 @@
 
 use fml::Session;
 
-const ROLLING: &str = include_str!("../models/rolling.fml");
+const ROLLING: &str = include_str!("fixtures/rolling.fml");
 
 #[test]
 fn switchover_blends_actuals_and_forecast() {

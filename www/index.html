@@ -369,7 +369,7 @@
   <span id="stats">loading…</span>
 </div>
 <script type="module">
-const MODELS = ["rolling", "budget", "team_budget", "finplan", "solar_pf", "fx_consol"];
+const MODELS = ["industrial_budget"];
 const enc = new TextEncoder(), dec = new TextDecoder();
 let exports, prev = {}, current = "finplan", loadedOk = false, lastState = null;
 let baseVals = {}, activeScen = "Base";
@@ -1637,7 +1637,7 @@ window.addEventListener("keydown", e => {
     hideComp();
   }
 });
-await switchModel("finplan");
+await switchModel("industrial_budget");
 </script>
 </body>
 </html>

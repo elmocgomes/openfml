@@ -6,7 +6,7 @@ use std::collections::HashMap;
 
 #[test]
 fn fx_consolidation_matches_reference_implementation() {
-    let path = format!("{}/models/fx_consol.fml", env!("CARGO_MANIFEST_DIR"));
+    let path = format!("{}/tests/fixtures/fx_consol.fml", env!("CARGO_MANIFEST_DIR"));
     let src = std::fs::read_to_string(&path).expect("read fx_consol.fml");
     let result = fml::run(&src).expect("compile + evaluate fx_consol");
 

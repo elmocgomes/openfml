@@ -3,7 +3,7 @@
 use fml::server::{Process, apply_event, replay, Acl, Event};
 use fml::Session;
 
-const BUDGET: &str = include_str!("../models/budget.fml");
+const BUDGET: &str = include_str!("fixtures/budget.fml");
 
 #[test]
 fn acl_subspace_authorization() {

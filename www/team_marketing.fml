@@ -1,2 +1,0 @@
-// Marketing — owned by the Marketing lead. Edit only this file.
-input marketing_spend : kEUR flow over plan = { 2026: 420, 2027: 460, 2028: 500, 2029: 540 }

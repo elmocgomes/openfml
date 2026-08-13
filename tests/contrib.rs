@@ -10,7 +10,7 @@ fn term_sum(ex: &fml::live::Explanation) -> f64 {
 
 #[test]
 fn rollup_terms_are_exact_shares() {
-    let mut s = Session::new(include_str!("../models/budget.fml")).unwrap();
+    let mut s = Session::new(include_str!("fixtures/budget.fml")).unwrap();
     s.run_full().unwrap();
     // total_expenses = expenses[Total]: 3 leaf terms, summing exactly.
     let ex = s.explain("total_expenses", None, Some(0)).unwrap();
@@ -26,7 +26,7 @@ fn rollup_terms_are_exact_shares() {
 
 #[test]
 fn signed_terms_bridge_a_difference() {
-    let mut s = Session::new(include_str!("../models/budget.fml")).unwrap();
+    let mut s = Session::new(include_str!("fixtures/budget.fml")).unwrap();
     s.run_full().unwrap();
     // headroom = budget_cap − total_expenses: +1700 and −1635 → 65.
     let ex = s.explain("headroom", None, Some(0)).unwrap();
@@ -39,7 +39,7 @@ fn signed_terms_bridge_a_difference() {
 
 #[test]
 fn calendar_sums_decompose_per_period() {
-    let mut s = Session::new(include_str!("../models/rolling.fml")).unwrap();
+    let mut s = Session::new(include_str!("fixtures/rolling.fml")).unwrap();
     s.run_full().unwrap();
     let ex = s.explain("fy_profit", None, None).unwrap();
     assert_eq!(ex.terms.len(), 12, "sum[m](profit) → 12 monthly terms");
@@ -52,7 +52,7 @@ fn calendar_sums_decompose_per_period() {
 
 #[test]
 fn non_additive_cells_are_one_honest_term() {
-    let mut s = Session::new(include_str!("../models/rolling.fml")).unwrap();
+    let mut s = Session::new(include_str!("fixtures/rolling.fml")).unwrap();
     s.run_full().unwrap();
     // profit = sales × margin: no additive split exists — one labeled term.
     let ex = s.explain("profit", None, Some(3)).unwrap();
@@ -99,7 +99,7 @@ fn mixed_sum_of_cell_and_product_terms() {
 
 #[test]
 fn allocation_terms_expose_the_loaded_cost_split() {
-    let mut s = Session::new(include_str!("../models/budget.fml")).unwrap();
+    let mut s = Session::new(include_str!("fixtures/budget.fml")).unwrap();
     s.run_full().unwrap();
     // loaded_cost = expenses + overhead_share: exactly two drillable terms.
     let ex = s.explain("loaded_cost", Some("Marketing"), Some(0)).unwrap();
@@ -111,7 +111,7 @@ fn allocation_terms_expose_the_loaded_cost_split() {
 
 #[test]
 fn inputs_have_no_terms() {
-    let mut s = Session::new(include_str!("../models/rolling.fml")).unwrap();
+    let mut s = Session::new(include_str!("fixtures/rolling.fml")).unwrap();
     s.run_full().unwrap();
     let ex = s.explain("growth", None, None).unwrap();
     assert!(ex.terms.is_empty());

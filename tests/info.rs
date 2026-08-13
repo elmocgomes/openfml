@@ -31,7 +31,7 @@ fn measure<'a>(info: &'a J, name: &str) -> &'a J {
 
 #[test]
 fn the_reference_graph_is_exact_and_symmetric() {
-    let mut session = Session::new(include_str!("../models/budget.fml")).unwrap();
+    let mut session = Session::new(include_str!("fixtures/budget.fml")).unwrap();
     session.run_full().unwrap();
     let info = parse(&session.model_info_json()).unwrap();
     assert_eq!(s(info.get("model").unwrap()), "demo.budget");
@@ -64,9 +64,9 @@ fn the_reference_graph_is_exact_and_symmetric() {
 
 #[test]
 fn the_include_hierarchy_names_children_and_owns_decls() {
-    let master = include_str!("../models/team_budget.fml");
+    let master = include_str!("fixtures/team_budget.fml");
     let exp = fml::expand_includes_with_map("team_budget.fml", master, &mut |p: &str| {
-        std::fs::read_to_string(format!("models/{p}")).map_err(|e| e.to_string())
+        std::fs::read_to_string(format!("tests/fixtures/{p}")).map_err(|e| e.to_string())
     })
     .unwrap();
     let mut session = Session::new_expanded(exp).unwrap();
@@ -95,7 +95,7 @@ fn the_include_hierarchy_names_children_and_owns_decls() {
 
 #[test]
 fn solve_and_distribution_flags_survive() {
-    let mut session = Session::new(include_str!("../models/rolling.fml")).unwrap();
+    let mut session = Session::new(include_str!("fixtures/rolling.fml")).unwrap();
     session.run_full().unwrap();
     let info = parse(&session.model_info_json()).unwrap();
     let margin = measure(&info, "margin");

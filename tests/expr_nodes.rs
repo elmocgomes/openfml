@@ -24,7 +24,7 @@ fn node_children<'a>(n: &Red<'a>, kind: SyntaxKind) -> Vec<Red<'a>> {
 
 #[test]
 fn bodies_arms_and_entries_are_nodes() {
-    let cst = parse_cst(include_str!("../models/budget.fml")).unwrap();
+    let cst = parse_cst(include_str!("fixtures/budget.fml")).unwrap();
     let root = Red::root(&cst);
     // expenses: InputDecl → Body → 3 MatchArms; Marketing arm → 4 MapEntries.
     let expenses = find_decl(&root, "expenses");
@@ -46,12 +46,12 @@ fn bodies_arms_and_entries_are_nodes() {
 #[test]
 fn nesting_never_breaks_losslessness() {
     for src in [
-        include_str!("../models/finplan.fml"),
-        include_str!("../models/solar_pf.fml"),
-        include_str!("../models/fx_consol.fml"),
-        include_str!("../models/budget.fml"),
-        include_str!("../models/rolling.fml"),
-        include_str!("../models/team_budget.fml"),
+        include_str!("fixtures/finplan.fml"),
+        include_str!("fixtures/solar_pf.fml"),
+        include_str!("fixtures/fx_consol.fml"),
+        include_str!("fixtures/budget.fml"),
+        include_str!("fixtures/rolling.fml"),
+        include_str!("fixtures/team_budget.fml"),
     ] {
         assert_eq!(parse_cst(src).unwrap().text(), src);
     }
@@ -59,13 +59,13 @@ fn nesting_never_breaks_losslessness() {
 
 #[test]
 fn body_text_and_replace_formula_round_trip() {
-    let mut s = Session::new(include_str!("../models/rolling.fml")).unwrap();
+    let mut s = Session::new(include_str!("fixtures/rolling.fml")).unwrap();
     s.run_full().unwrap();
     assert_eq!(s.body_text("profit").as_deref(), Some("sales * margin"));
     let base = s.get("profit", None, Some(0)).unwrap();
     let files = s.replace_formula("profit", "sales * margin * 0.9").unwrap();
     // Everything outside the formula is byte-identical.
-    let old = include_str!("../models/rolling.fml");
+    let old = include_str!("fixtures/rolling.fml");
     assert_eq!(files[0].1, old.replace("= sales * margin\n", "= sales * margin * 0.9\n"));
     let mut s2 = Session::new(&files[0].1).unwrap();
     s2.run_full().unwrap();
@@ -74,7 +74,7 @@ fn body_text_and_replace_formula_round_trip() {
 
 #[test]
 fn replace_formula_pre_checks_syntax_and_targets() {
-    let mut s = Session::new(include_str!("../models/rolling.fml")).unwrap();
+    let mut s = Session::new(include_str!("fixtures/rolling.fml")).unwrap();
     s.run_full().unwrap();
     let err = s.replace_formula("profit", "sales *").unwrap_err();
     assert!(err.contains("not a valid formula"), "err: {err}");
@@ -91,13 +91,13 @@ fn replace_formula_pre_checks_syntax_and_targets() {
 #[test]
 fn formula_edits_route_to_the_owning_file() {
     let files = [
-        ("team_marketing.fml", include_str!("../models/team_marketing.fml")),
-        ("team_engineering.fml", include_str!("../models/team_engineering.fml")),
-        ("team_operations.fml", include_str!("../models/team_operations.fml")),
+        ("team_marketing.fml", include_str!("fixtures/team_marketing.fml")),
+        ("team_engineering.fml", include_str!("fixtures/team_engineering.fml")),
+        ("team_operations.fml", include_str!("fixtures/team_operations.fml")),
     ];
     let exp = fml::expand_includes_with_map(
         "team_budget.fml",
-        include_str!("../models/team_budget.fml"),
+        include_str!("fixtures/team_budget.fml"),
         &mut |p| {
             files
                 .iter()
@@ -113,5 +113,5 @@ fn formula_edits_route_to_the_owning_file() {
     let ops = out.iter().find(|(n, _)| n == "team_operations.fml").unwrap();
     assert!(ops.1.contains("= 330"), "{}", ops.1);
     let master = out.iter().find(|(n, _)| n == "team_budget.fml").unwrap();
-    assert_eq!(master.1, include_str!("../models/team_budget.fml"), "master untouched");
+    assert_eq!(master.1, include_str!("fixtures/team_budget.fml"), "master untouched");
 }

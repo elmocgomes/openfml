@@ -4,7 +4,7 @@
 use fml::check::Dist;
 use fml::Session;
 
-const ROLLING: &str = include_str!("../models/rolling.fml");
+const ROLLING: &str = include_str!("fixtures/rolling.fml");
 
 #[test]
 fn metalog_fits_its_quantiles_exactly() {

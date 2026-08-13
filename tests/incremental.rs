@@ -3,7 +3,7 @@
 
 use fml::Session;
 
-const FINPLAN: &str = include_str!("../models/finplan.fml");
+const FINPLAN: &str = include_str!("fixtures/finplan.fml");
 
 #[test]
 fn incremental_matches_full_recompute() {

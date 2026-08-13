@@ -8,13 +8,13 @@ use std::collections::HashMap;
 
 fn team_session() -> Session {
     let files = [
-        ("team_marketing.fml", include_str!("../models/team_marketing.fml")),
-        ("team_engineering.fml", include_str!("../models/team_engineering.fml")),
-        ("team_operations.fml", include_str!("../models/team_operations.fml")),
+        ("team_marketing.fml", include_str!("fixtures/team_marketing.fml")),
+        ("team_engineering.fml", include_str!("fixtures/team_engineering.fml")),
+        ("team_operations.fml", include_str!("fixtures/team_operations.fml")),
     ];
     let exp = fml::expand_includes_with_map(
         "team_budget.fml",
-        include_str!("../models/team_budget.fml"),
+        include_str!("fixtures/team_budget.fml"),
         &mut |p| {
             files
                 .iter()
@@ -31,7 +31,7 @@ fn team_session() -> Session {
 
 #[test]
 fn add_period_extends_calendar_and_full_range_maps() {
-    let mut s = Session::new(include_str!("../models/budget.fml")).unwrap();
+    let mut s = Session::new(include_str!("fixtures/budget.fml")).unwrap();
     s.run_full().unwrap();
     let (files, label) = s.add_period().unwrap();
     assert_eq!(label, "2030");
@@ -77,7 +77,7 @@ fn add_period_reaches_into_included_files() {
 fn add_period_skips_subrange_maps() {
     // rolling: sales_act ranges over `closed`, not the calendar — adding a
     // month must NOT touch it.
-    let mut s = Session::new(include_str!("../models/rolling.fml")).unwrap();
+    let mut s = Session::new(include_str!("fixtures/rolling.fml")).unwrap();
     s.run_full().unwrap();
     let (files, label) = s.add_period().unwrap();
     assert_eq!(label, "2027-01");
@@ -94,7 +94,7 @@ fn add_period_skips_subrange_maps() {
 
 #[test]
 fn rename_measure_rewrites_every_reference() {
-    let mut s = Session::new(include_str!("../models/budget.fml")).unwrap();
+    let mut s = Session::new(include_str!("fixtures/budget.fml")).unwrap();
     s.run_full().unwrap();
     let files = s.rename_measure("expenses", "spend").unwrap();
     let text = &files[0].1;
@@ -125,7 +125,7 @@ fn rename_reaches_into_included_files() {
 
 #[test]
 fn rename_guards_the_namespaces() {
-    let mut s = Session::new(include_str!("../models/budget.fml")).unwrap();
+    let mut s = Session::new(include_str!("fixtures/budget.fml")).unwrap();
     s.run_full().unwrap();
     for (new, why) in [
         ("headroom", "existing measure"),
@@ -144,7 +144,7 @@ fn rename_guards_the_namespaces() {
 
 #[test]
 fn add_member_extends_dimension_and_every_match() {
-    let mut s = Session::new(include_str!("../models/budget.fml")).unwrap();
+    let mut s = Session::new(include_str!("fixtures/budget.fml")).unwrap();
     s.run_full().unwrap();
     let files = s.add_member("CostCenter", "Support", "0").unwrap();
     let text = &files[0].1;
@@ -193,7 +193,7 @@ fn add_member_respects_inline_blocks_and_else_arms() {
 
 #[test]
 fn add_member_guards() {
-    let mut s = Session::new(include_str!("../models/budget.fml")).unwrap();
+    let mut s = Session::new(include_str!("fixtures/budget.fml")).unwrap();
     s.run_full().unwrap();
     assert!(s.add_member("Ghost", "X", "0").is_err(), "unknown dimension");
     assert!(s.add_member("CostCenter", "Marketing", "0").is_err(), "existing member");
@@ -201,7 +201,7 @@ fn add_member_guards() {
     assert!(s.add_member("CostCenter", "round", "0").is_err(), "keyword");
     assert!(s.add_member("CostCenter", "New", "").is_err(), "empty default");
     // The functional dimension is refused with guidance.
-    let mut fx = Session::new(include_str!("../models/fx_consol.fml")).unwrap();
+    let mut fx = Session::new(include_str!("fixtures/fx_consol.fml")).unwrap();
     fx.run_full().unwrap();
     let err = fx.add_member("Entity", "DE_Co", "0").unwrap_err();
     assert!(err.contains("currency"), "err: {err}");

@@ -5,7 +5,7 @@
 use fml::Session;
 use std::collections::HashMap;
 
-const ROLLING: &str = include_str!("../models/rolling.fml");
+const ROLLING: &str = include_str!("fixtures/rolling.fml");
 
 fn rolling() -> Session {
     let mut s = Session::new(ROLLING).unwrap();
@@ -80,13 +80,13 @@ fn prev_at_range_start_explains_the_init() {
 #[test]
 fn multi_file_definitions_locate_their_owning_file() {
     let files: HashMap<&str, String> = HashMap::from([
-        ("team_marketing.fml", include_str!("../models/team_marketing.fml").to_string()),
-        ("team_engineering.fml", include_str!("../models/team_engineering.fml").to_string()),
-        ("team_operations.fml", include_str!("../models/team_operations.fml").to_string()),
+        ("team_marketing.fml", include_str!("fixtures/team_marketing.fml").to_string()),
+        ("team_engineering.fml", include_str!("fixtures/team_engineering.fml").to_string()),
+        ("team_operations.fml", include_str!("fixtures/team_operations.fml").to_string()),
     ]);
     let exp = fml::expand_includes_with_map(
         "team_budget.fml",
-        include_str!("../models/team_budget.fml"),
+        include_str!("fixtures/team_budget.fml"),
         &mut |p| files.get(p).cloned().ok_or_else(|| format!("missing {p}")),
     )
     .unwrap();
@@ -107,7 +107,7 @@ fn multi_file_definitions_locate_their_owning_file() {
 
 #[test]
 fn group_rollups_expand_to_leaf_cells() {
-    let mut s = Session::new(include_str!("../models/budget.fml")).unwrap();
+    let mut s = Session::new(include_str!("fixtures/budget.fml")).unwrap();
     s.run_full().unwrap();
     // total_expenses = expenses[Total] — a tree rollup: 3 leaf deps.
     let ex = s.explain("total_expenses", None, Some(0)).unwrap();
@@ -122,7 +122,7 @@ fn group_rollups_expand_to_leaf_cells() {
 
 #[test]
 fn solve_measures_say_so() {
-    let mut s = Session::new(include_str!("../models/finplan.fml")).unwrap();
+    let mut s = Session::new(include_str!("fixtures/finplan.fml")).unwrap();
     s.run_full().unwrap();
     let solved = s
         .checked

@@ -55,7 +55,7 @@ fn qty_literals_replace_three_tokens_for_three() {
 fn the_session_source_is_always_the_cst_reprint() {
     // Internal coherence: after edits, src == cst reprint == a fresh
     // CST's reprint of src (losslessness is stable under editing).
-    let mut s = Session::new(include_str!("../models/budget.fml")).unwrap();
+    let mut s = Session::new(include_str!("fixtures/budget.fml")).unwrap();
     s.run_full().unwrap();
     s.patch_input("expenses", Some("Marketing"), Some(0), 431.5).unwrap();
     s.patch_input("headcount", Some("Engineering"), None, 51.0).unwrap();

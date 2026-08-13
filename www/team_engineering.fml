@@ -1,2 +1,0 @@
-// Engineering — owned by the Engineering lead. Edit only this file.
-input engineering_spend : kEUR flow over plan = { 2026: 900, 2027: 990, 2028: 1_050, 2029: 1_100 }

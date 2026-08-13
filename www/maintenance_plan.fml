@@ -1,0 +1,4 @@
+// Maintenance & plant — overheads and the capex plan. Owned by maintenance.
+input plant_overhead : kEUR flow over q = { 2026-Q1: 3_300, 2026-Q2: 3_200, 2026-Q3: 3_100, 2026-Q4: 3_250 }
+input maintenance_spend : kEUR flow over q = { 2026-Q1: 1_150, 2026-Q2: 1_050, 2026-Q3: 1_000, 2026-Q4: 1_200 }
+input capex : kEUR flow over q = { 2026-Q1: 1_100, 2026-Q2: 900, 2026-Q3: 850, 2026-Q4: 950 }

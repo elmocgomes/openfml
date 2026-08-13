@@ -3,7 +3,7 @@
 
 use fml::Session;
 
-const ROLLING: &str = include_str!("../models/rolling.fml");
+const ROLLING: &str = include_str!("fixtures/rolling.fml");
 
 #[test]
 fn nonlinear_goal_through_compounding_growth() {
@@ -28,13 +28,13 @@ fn nonlinear_goal_through_compounding_growth() {
 fn linear_goal_is_exact_and_fast() {
     // headroom@2029 = budget_cap - Σ spends: linear in any one spend.
     let files = [
-        ("team_marketing.fml", include_str!("../models/team_marketing.fml")),
-        ("team_engineering.fml", include_str!("../models/team_engineering.fml")),
-        ("team_operations.fml", include_str!("../models/team_operations.fml")),
+        ("team_marketing.fml", include_str!("fixtures/team_marketing.fml")),
+        ("team_engineering.fml", include_str!("fixtures/team_engineering.fml")),
+        ("team_operations.fml", include_str!("fixtures/team_operations.fml")),
     ];
     let exp = fml::expand_includes_with_map(
         "team_budget.fml",
-        include_str!("../models/team_budget.fml"),
+        include_str!("fixtures/team_budget.fml"),
         &mut |p| {
             files
                 .iter()
@@ -61,7 +61,7 @@ fn linear_goal_is_exact_and_fast() {
 #[test]
 fn unresponsive_levers_are_rejected() {
     // 2029 marketing spend cannot move 2026 headroom (no cross-period dep).
-    let mut s = Session::new(include_str!("../models/budget.fml")).unwrap();
+    let mut s = Session::new(include_str!("fixtures/budget.fml")).unwrap();
     s.run_full().unwrap();
     let err = s
         .goal_seek(
@@ -81,7 +81,7 @@ fn unresponsive_levers_are_rejected() {
 fn goal_seek_through_a_solve_block() {
     // FINPLAN: the financing fixpoint sits between the lever and the
     // target — every secant evaluation re-runs the Gauss–Seidel solve.
-    let mut s = Session::new(include_str!("../models/finplan.fml")).unwrap();
+    let mut s = Session::new(include_str!("fixtures/finplan.fml")).unwrap();
     s.run_full().unwrap();
     // `price` is computed inside the financing fixpoint; `ebit_margin` is
     // an upstream input. Every secant evaluation re-solves the SCC.

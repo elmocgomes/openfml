@@ -1,3 +1,0 @@
-// Operations — owned by the Operations lead. Edit only this file.
-// A single broadcast literal: one number fills every plan year.
-input operations_spend : kEUR flow over plan = 315

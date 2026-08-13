@@ -10,7 +10,7 @@ fn series(result: &fml::EvalResult) -> HashMap<String, Vec<f64>> {
 
 #[test]
 fn finplan_matches_reference_implementation() {
-    let path = format!("{}/models/finplan.fml", env!("CARGO_MANIFEST_DIR"));
+    let path = format!("{}/tests/fixtures/finplan.fml", env!("CARGO_MANIFEST_DIR"));
     let src = std::fs::read_to_string(&path).expect("read finplan.fml");
     let result = fml::run(&src).expect("compile + evaluate finplan");
 

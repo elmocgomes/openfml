@@ -4,7 +4,7 @@
 
 use fml::Session;
 
-const FINPLAN: &str = include_str!("../models/finplan.fml");
+const FINPLAN: &str = include_str!("fixtures/finplan.fml");
 
 fn with_scenarios(extra: &str) -> String {
     format!("{FINPLAN}\n{extra}\n")

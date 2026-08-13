@@ -14,7 +14,7 @@ fn single(src: &str) -> Expanded {
     }
 }
 
-const BUDGET: &str = include_str!("../models/budget.fml");
+const BUDGET: &str = include_str!("fixtures/budget.fml");
 
 #[test]
 fn trivia_edits_reuse_the_analysis_and_runtime() {
@@ -88,14 +88,14 @@ fn reordered_declarations_are_not_reused() {
 
 #[test]
 fn multi_file_trivia_reuse_and_cross_file_move_guard() {
-    let mk = include_str!("../models/team_marketing.fml");
-    let eng = include_str!("../models/team_engineering.fml");
-    let ops = include_str!("../models/team_operations.fml");
+    let mk = include_str!("fixtures/team_marketing.fml");
+    let eng = include_str!("fixtures/team_engineering.fml");
+    let ops = include_str!("fixtures/team_operations.fml");
     let build = |mk: &str, eng: &str, ops: &str| -> Expanded {
         let files = [("team_marketing.fml", mk), ("team_engineering.fml", eng), ("team_operations.fml", ops)];
         fml::expand_includes_with_map(
             "team_budget.fml",
-            include_str!("../models/team_budget.fml"),
+            include_str!("fixtures/team_budget.fml"),
             &mut |p| {
                 files
                     .iter()

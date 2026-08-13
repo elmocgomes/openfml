@@ -6,7 +6,7 @@ use std::collections::HashMap;
 
 #[test]
 fn solar_pf_matches_reference_implementation() {
-    let path = format!("{}/models/solar_pf.fml", env!("CARGO_MANIFEST_DIR"));
+    let path = format!("{}/tests/fixtures/solar_pf.fml", env!("CARGO_MANIFEST_DIR"));
     let src = std::fs::read_to_string(&path).expect("read solar_pf.fml");
     let result = fml::run(&src).expect("compile + evaluate solar_pf");
 
