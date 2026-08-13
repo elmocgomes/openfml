@@ -2091,6 +2091,17 @@ impl Session {
                             mi.data_src.clone().map_or(J::Null, J::S),
                         ),
                         (
+                            "formula".into(),
+                            self.body_text(&mi.name).map_or(J::Null, |b| {
+                                let mut b = b.split_whitespace().collect::<Vec<_>>().join(" ");
+                                if b.len() > 320 {
+                                    b.truncate(320);
+                                    b.push('…');
+                                }
+                                J::S(b)
+                            }),
+                        ),
+                        (
                             "refs".into(),
                             J::A(refs_per[m].iter().map(|r| J::S(r.clone())).collect()),
                         ),

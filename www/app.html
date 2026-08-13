@@ -118,6 +118,19 @@
   .rolebadge.viewer { background: #eef0f3; color: var(--mut); }
   .tok { width: 100%; font: .8rem ui-monospace, monospace; padding: .35rem .5rem; margin-top: .4rem;
          border: 1px solid var(--line); border-radius: 6px; background: #fafbfd; }
+  /* ---- formula trace ---- */
+  .tnode { border-left: 2px solid var(--line); margin: .3rem 0 .3rem .35rem; padding: .25rem 0 .25rem .8rem; }
+  .tnode.root { border-left-color: var(--pri); }
+  .tline { display: flex; align-items: baseline; gap: .55rem; flex-wrap: wrap; }
+  .tname { font-family: "SF Mono", ui-monospace, monospace; font-weight: 700; font-size: .9rem; color: var(--navy2); }
+  .tval { margin-left: auto; font-family: "SF Mono", ui-monospace, monospace; font-variant-numeric: tabular-nums; font-weight: 600; }
+  .tunit { color: var(--mut); font-size: .74rem; }
+  .tformula { font-family: "SF Mono", ui-monospace, monospace; font-size: .86rem; color: #333c4b; margin-top: .1rem; line-height: 1.7; word-break: break-word; }
+  .tref { background: var(--pri2); color: var(--pri); border-radius: 5px; padding: .04rem .3rem; cursor: pointer; font-weight: 600; }
+  .tref:hover { background: #d7e4fa; }
+  .tref.openref { background: var(--navy2); color: #fff; }
+  .tnote { color: var(--mut); font-size: .78rem; }
+
   #toast { position: fixed; bottom: 1.2rem; right: 1.4rem; background: var(--navy); color: #fff; padding: .6rem 1.1rem;
            border-radius: 8px; font-size: .88rem; box-shadow: 0 6px 24px rgba(0,0,0,.25); display: none; z-index: 40; }
   #toast.bad { background: var(--bad); }
@@ -150,6 +163,7 @@
   <nav>
     <a data-p="dash" class="on"><span class="ic">◧</span>Dashboard</a>
     <a data-p="entry"><span class="ic">▦</span>Budget entry</a>
+    <a data-p="formulas"><span class="ic">⇄</span>Formulas</a>
     <a data-p="process"><span class="ic">◷</span>Workflow</a>
     <a data-p="audit" id="navAudit" style="display:none"><span class="ic">☰</span>Audit log</a>
     <a data-p="admin" id="navAdmin" style="display:none"><span class="ic">⚙</span>Administration</a>
@@ -256,9 +270,10 @@ function renderRound() {
 
 // ---- pages ----------------------------------------------------------------
 function renderPage() {
-  $("crumb").innerHTML = { dash: "Dashboard", entry: "Budget entry", process: "Workflow",
-    audit: "Audit log", admin: "Administration" }[PAGE] + ` <small>· ${esc(MODEL)}</small>`;
-  ({ dash: pageDash, entry: pageEntry, process: pageProcess, audit: pageAudit, admin: pageAdmin })[PAGE]();
+  $("crumb").innerHTML = { dash: "Dashboard", entry: "Budget entry", formulas: "Formulas",
+    process: "Workflow", audit: "Audit log", admin: "Administration" }[PAGE] + ` <small>· ${esc(MODEL)}</small>`;
+  ({ dash: pageDash, entry: pageEntry, formulas: pageFormulas, process: pageProcess,
+     audit: pageAudit, admin: pageAdmin })[PAGE]();
 }
 
 function spark(vals) {
@@ -357,6 +372,73 @@ function pageEntry() {
       if (e.key === "Escape") { done = true; renderPage(); }
     });
     inp.addEventListener("blur", commit);
+  }));
+}
+
+let TRACE_INFO = null, traceOpen = new Set(), traceRoot = null;
+function tval(name) {
+  const s = (STATE.series || []).filter(r => r.key === name);
+  if (s.length) {
+    const unit = s[0].unit || "";
+    if (unit.includes("/") || unit === "1" || unit === "") {
+      const t = s[0].range[1];
+      return { v: fmt(s[0].vals[t]), u: unit + " · " + (STATE.periods[t] || "") };
+    }
+    const fy = s.reduce((a, r) => a + r.vals.reduce((x, v) => x + (v || 0), 0), 0);
+    return { v: fmt(fy), u: unit + " · FY" };
+  }
+  const sc = (STATE.scalars || []).find(x => x.name === name);
+  return sc ? { v: fmt(sc.val), u: sc.unit || "" } : null;
+}
+function tformula(m, byName) {
+  if (m.data) return `<span class="tnote">facts from <b>${esc(m.data)}</b> — read-only, changes by re-import</span>`;
+  if (m.dist) return `<span class="tnote">stochastic input (distribution)</span>`;
+  if (m.formula === null || m.formula === undefined) return `<span class="tnote">source value</span>`;
+  return esc(m.formula).split(/([A-Za-z_$][A-Za-z0-9_]*)/g).map(p =>
+    byName[p] && p !== m.name
+      ? `<span class="tref${traceOpen.has(m.name + "→" + p) ? " openref" : ""}" data-of="${esc(m.name)}" data-n="${esc(p)}">${p}</span>`
+      : p).join("");
+}
+function tnode(name, byName, seen, root) {
+  const m = byName[name];
+  if (!m) return "";
+  const val = tval(name);
+  const kids = (m.refs || []).filter(r => traceOpen.has(name + "→" + r) && !seen.has(r))
+    .map(r => tnode(r, byName, new Set([...seen, r]), false)).join("");
+  const tag = m.input ? (m.data ? "fact" : "input") : "";
+  return `<div class="tnode${root ? " root" : ""}">
+    <div class="tline"><span class="tname">${esc(name)}</span>
+      ${tag ? `<span class="pill open" style="background:#eef0f3;color:var(--mut)">${tag}</span>` : ""}
+      ${val ? `<span class="tval">${val.v}<span class="tunit"> ${esc(val.u)}</span></span>` : ""}</div>
+    <div class="tformula">= ${tformula(m, byName)}</div>${kids}</div>`;
+}
+async function pageFormulas() {
+  if (!TRACE_INFO || TRACE_INFO._model !== MODEL) {
+    TRACE_INFO = await get("/info" + qs());
+    TRACE_INFO._model = MODEL;
+    traceOpen.clear();
+    traceRoot = null;
+  }
+  const info = TRACE_INFO;
+  if (!info.ok) { $("content").innerHTML = `<div class="card">${esc(info.error || "unavailable")}</div>`; return; }
+  const byName = {};
+  info.measures.forEach(m => byName[m.name] = m);
+  const computed = info.measures.filter(m => !m.input).map(m => m.name);
+  const all = [...computed, ...info.measures.filter(m => m.input).map(m => m.name)];
+  if (!traceRoot) traceRoot = computed[computed.length - 1] || all[0];
+  $("content").innerHTML = `
+    <div class="toolbar" style="margin-top:0">
+      <span style="color:var(--mut);font-size:.78rem;text-transform:uppercase;letter-spacing:.6px">Trace</span>
+      <select id="traceSel" style="font:inherit;padding:.3rem .5rem;border:1px solid var(--line);border-radius:6px">
+        ${all.map(n => `<option${n === traceRoot ? " selected" : ""}>${esc(n)}</option>`).join("")}</select>
+      <span style="color:var(--mut);font-size:.8rem">where every number comes from — click a name in a formula to unfold it</span>
+    </div>
+    <div class="card">${tnode(traceRoot, byName, new Set([traceRoot]), true)}</div>`;
+  $("traceSel").onchange = () => { traceRoot = $("traceSel").value; traceOpen.clear(); pageFormulas(); };
+  document.querySelectorAll(".tref").forEach(el => el.addEventListener("click", () => {
+    const key = el.dataset.of + "→" + el.dataset.n;
+    if (traceOpen.has(key)) traceOpen.delete(key); else traceOpen.add(key);
+    pageFormulas();
   }));
 }
 

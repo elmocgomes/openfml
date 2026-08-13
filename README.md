@@ -688,6 +688,27 @@ The scheduler generalizes to the (measure × member × period) micro-graph.
   exactly), the skolem rejection, DAG enforcement, arity/name-position
   errors, provenance through defs, and goal-seek inverting THROUGH a
   def (recovering the discount rate from a target valuation).
+- **The studio (slice 21)** — the workbench remade for finance people
+  who aren't programmers, matching the portal's shell: navy sidebar
+  navigation with five pages. **Overview** (the model cards + DAG);
+  **Budget** (the grid with a scenario/simulate/structural-edit
+  toolbar); **Formulas** — dependency tracing that shows dependencies
+  AS FORMULAS: pick a measure, see `ebitda = gross_margin −
+  plant_overhead − …` with every name a clickable chip that unfolds
+  its own formula beneath, indented, down to inputs, facts ("from
+  energy_prices.csv") and distributions, each line carrying its live
+  FY value (rates show the latest period, not a meaningless sum);
+  **Files** — an explorer with folders (Model / Departments /
+  Libraries / Facts), classified from the model itself (all-def files
+  are libraries), click-to-open in the editor beside it; **Team &
+  access** — a first-class page: connected admins get people, roles,
+  the per-user write-grant matrix, token minting, round control
+  (lock/reopen), the signed audit timeline and checkpoint; editors see
+  their own access; the local sandbox explains the server model.
+  `model_info` gained per-measure formula text to feed the trace. The
+  contributor portal gained the same **Formulas** page (read-only,
+  via GET /info) — a sales editor can now trace revenue = volume ×
+  price down to her own department's numbers.
 - Still ahead — per-declaration unit-inference/scheduling queries,
   integer minor-unit representation, read-side information-flow
   control, TLS / reverse-proxy deployment.

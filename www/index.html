@@ -17,64 +17,66 @@
     --sans: -apple-system, "Segoe UI", Inter, Roboto, sans-serif;
   }
   * { box-sizing: border-box; }
+  html, body { height: 100%; }
   body { font: 14px/1.5 var(--sans); color: var(--ink); background: var(--bg);
-         margin: 0; height: 100vh; display: flex; flex-direction: column; }
+         margin: 0; display: flex; }
   button { font: inherit; font-size:.82rem; font-weight:600; border:0; border-radius:6px;
     padding:.28rem .75rem; background:var(--pri2); color:var(--pri); cursor:pointer; }
   button:hover { filter: brightness(.96); }
   input, select, textarea { font: inherit; color: inherit; }
 
-  /* ---- navy app bar ---- */
-  header { display:flex; align-items:center; gap:.8rem; padding:.5rem 1.1rem;
-           background: var(--navy); color:#cfd9e6; flex-wrap:wrap; row-gap:.35rem; }
-  header .brand { color:#fff; font-weight:700; font-size:1rem; letter-spacing:.3px; line-height:1.1; }
-  header .brand small { display:block; font-weight:400; color:#8fa3bb; font-size:.6rem;
-    letter-spacing:1px; text-transform:uppercase; margin-top:.1rem; }
-  #modelSel { background:var(--navy2); color:#fff; border:1px solid var(--navy3);
-    border-radius:6px; padding:.28rem .5rem; font-size:.85rem; max-width:12em; }
-  /* ---- the menu bar: File · Model · Scenario · View, checks at right ---- */
-  #menubar { display:flex; align-items:center; gap:.1rem; }
-  header .actions { display:contents; }
-  header .menu { position:relative; }
-  header .menu.right { margin-left:auto; }
-  header .mbtn { background:transparent; border:0; color:#cfd9e6; font-size:.85rem;
-    font-weight:500; padding:.32rem .7rem; border-radius:6px; }
-  header .mbtn:hover, header .menu.open .mbtn { background:var(--navy2); color:#fff; filter:none; }
-  #checksLbl { font-weight:600; color:#8fe2ac; }
-  #checksLbl.bad { color:#ffa19c; animation: throb 1.2s ease-in-out infinite; }
+  /* ---- the studio shell: navy sidebar + topbar + pages ---- */
+  #side { width: 218px; min-width: 218px; background: var(--navy); color:#cfd9e6;
+          display:flex; flex-direction:column; }
+  #side .logo { padding: 1rem 1.1rem .8rem; color:#fff; font-weight:700; font-size:1.02rem;
+    letter-spacing:.3px; border-bottom:1px solid var(--navy3); }
+  #side .logo small { display:block; font-weight:400; color:#8fa3bb; font-size:.62rem;
+    letter-spacing:1px; text-transform:uppercase; margin-top:.15rem; }
+  #modelSel { margin:.8rem 1rem .3rem; width:calc(100% - 2rem); background:var(--navy2);
+    color:#fff; border:1px solid var(--navy3); border-radius:6px; padding:.4rem .5rem; font-size:.86rem; }
+  #side nav { margin-top:.5rem; flex:1; }
+  #side nav a { display:flex; align-items:center; gap:.65rem; padding:.5rem 1.1rem; color:#cfd9e6;
+    text-decoration:none; font-size:.9rem; border-left:3px solid transparent; cursor:pointer; }
+  #side nav a:hover { background:var(--navy2); }
+  #side nav a.on { background:var(--navy2); border-left-color:var(--pri); color:#fff; font-weight:600; }
+  #side nav a .ic { width:1.2em; text-align:center; opacity:.85; }
+  #side .whoami { padding:.8rem 1.1rem; border-top:1px solid var(--navy3); font-size:.78rem; color:#8fa3bb; }
+  #side .whoami b { display:block; color:#fff; font-size:.88rem; }
+  #maincol { flex:1; display:flex; flex-direction:column; min-width:0; }
+  #topbar { background:var(--card); border-bottom:1px solid var(--line); padding:.55rem 1.3rem;
+    display:flex; align-items:center; gap:.9rem; }
+  #crumb { font-weight:700; font-size:1rem; }
+  #crumb small { color:var(--mut); font-weight:400; }
+  #scenTag { background:var(--warnbg); color:var(--warn); border-radius:999px;
+    padding:.15rem .7rem; font-size:.76rem; font-weight:700; }
+  /* checks live at the topbar's right edge; detail in a dropdown */
+  #topbar .menu { position:relative; margin-left:auto; }
+  #checksLbl { background:transparent; font-weight:700; color:var(--ok); font-size:.84rem; padding:.25rem .6rem; }
+  #checksLbl.bad { color:var(--bad); animation: throb 1.2s ease-in-out infinite; }
   @keyframes throb { 50% { opacity:.55; } }
-  header .mdrop { display:none; position:absolute; top:calc(100% + 5px); left:0; z-index:30;
-    background:var(--card); color:var(--ink); border:1px solid var(--line); border-radius:10px;
-    box-shadow:0 12px 40px rgba(16,30,54,.28); min-width:210px; padding:.35rem; }
-  header .menu.open .mdrop { display:block; }
-  header .mdrop.rt { left:auto; right:0; }
-  header .mdrop button { display:flex; width:100%; text-align:left; background:transparent;
-    color:var(--ink); border:0; border-radius:6px; font-size:.84rem; font-weight:500;
-    padding:.42rem .6rem; cursor:pointer; align-items:center; gap:.5rem; }
-  header .mdrop button:hover { background:var(--pri2); color:var(--pri); filter:none; }
-  header .mdrop .mkey { margin-left:auto; color:var(--mut); font-size:.72rem; }
-  header .msep { height:1px; background:var(--line); margin:.3rem .2rem; }
-  header .minfo { display:block; padding:.3rem .6rem; font-size:.78rem; color:var(--mut); }
-  header .minfo button { display:inline; width:auto; padding:0 .2rem; color:var(--pri);
-    text-decoration:underline; font-size:inherit; }
-  header .mdrop input, header .mdrop select { border:1px solid var(--line); background:#fff;
-    color:var(--ink); border-radius:5px; padding:.22rem .4rem; font-size:.8rem; margin:.15rem 0; }
-  /* selectable items carry a leading checkmark slot */
-  header .views button::before, #scen button::before { content:""; display:inline-block; width:1em; }
-  header .views button.on::before, #scen button.on::before { content:"✓"; color:var(--pri); font-weight:700; }
-  header .views button.on, #scen button.on { color:var(--pri); font-weight:600; }
-  header .views, #scen { display:block; }
-  #simBtn.on::after { content:"active"; margin-left:auto; color:#7b3ff2; font-size:.7rem;
-    font-weight:700; text-transform:uppercase; letter-spacing:.5px; }
-  #draftState:empty { display:none; }
-  /* checks dropdown: one row per assert */
-  #asserts { display:block; min-width:240px; }
-  #asserts .pass, #asserts .fail { display:block; padding:.32rem .6rem; border-radius:6px;
-    font-size:.82rem; }
-  #asserts .pass { color: var(--ok); }
-  #asserts .fail { color: var(--bad); background:var(--badbg); font-weight:700; }
+  #topbar .mdrop { display:none; position:absolute; top:calc(100% + 6px); right:0; z-index:30;
+    background:var(--card); border:1px solid var(--line); border-radius:10px;
+    box-shadow:0 12px 40px rgba(16,30,54,.28); min-width:250px; padding:.35rem; }
+  #topbar .menu.open .mdrop { display:block; }
+  #asserts { display:block; }
+  #asserts .pass, #asserts .fail { display:block; padding:.32rem .6rem; border-radius:6px; font-size:.82rem; }
+  #asserts .pass { color:var(--ok); }
+  #asserts .fail { color:var(--bad); background:var(--badbg); font-weight:700; }
   .pass::before { content:"✓ "; } .fail::before { content:"✗ "; }
-
+  /* pages */
+  #pages { flex:1; min-height:0; position:relative; }
+  .page { display:none; height:100%; }
+  .page.on { display:flex; flex-direction:column; }
+  .toolbar { display:flex; gap:.55rem; align-items:center; padding:.6rem 1.3rem;
+    background:var(--card); border-bottom:1px solid var(--line); flex-wrap:wrap; }
+  .toolbar .tlbl { color:var(--mut); font-size:.72rem; text-transform:uppercase; letter-spacing:.6px; }
+  #scen { display:flex; gap:.35rem; }
+  #scen button { background:#fafbfd; border:1px solid var(--line); color:var(--ink); font-weight:500; }
+  #scen button.on { background:var(--warnbg); color:var(--warn); border-color:var(--amber2); font-weight:700; }
+  #simBtn.on { background:#f3e8fd; color:#7b3ff2; }
+  #draftState:empty { display:none; }
+  #draftState { color:var(--mut); font-size:.78rem; }
+  #draftState button { background:transparent; color:var(--pri); text-decoration:underline; padding:0 .2rem; }
   /* ---- status strips ---- */
   #scenBanner { padding:.45rem 1.1rem; background:var(--warnbg); color:var(--warn);
     border-bottom:1px solid var(--line); font-weight:600; font-size:.86rem;
@@ -116,20 +118,42 @@
     border:1px solid var(--line); border-radius:8px; }
   #landing button { width:100%; background:var(--pri); color:#fff; padding:.5rem; }
 
-  /* ---- layout: editor | splitter | grid ---- */
-  main { flex:1; display:grid; grid-template-columns: minmax(280px, 34%) 6px 1fr; min-height:0; }
-  /* Hidden panes leave the grid flow, so single-pane views use a single
-     column — the remaining pane auto-places into it. */
-  body.view-code main, body.view-grid main { grid-template-columns: 1fr !important; }
-  body.view-code #right, body.view-code #split { display:none; }
-  body.view-grid #left, body.view-grid #split { display:none; }
-  #split { cursor: col-resize; background: transparent; position:relative; }
-  #split::after { content:""; position:absolute; inset:0 2px; background: var(--line); }
-  #split:hover::after { background: var(--pri); }
-
+  /* ---- page layouts ---- */
+  #pageBudget #right { flex:1; }
+  #pageFiles .fbody { flex:1; display:flex; min-height:0; }
+  #fexp { width:250px; min-width:250px; overflow:auto; background:#fafbfd;
+    border-right:1px solid var(--line); padding:.7rem .6rem; }
+  #fexp h4 { margin:.7rem .4rem .25rem; font-size:.68rem; color:var(--mut);
+    text-transform:uppercase; letter-spacing:.8px; }
+  #fexp h4:first-child { margin-top:0; }
+  #fexp .fitem { display:flex; align-items:center; gap:.45rem; padding:.28rem .5rem;
+    border-radius:6px; font-size:.84rem; cursor:pointer; color:var(--ink); }
+  #fexp .fitem:hover { background:var(--pri2); }
+  #fexp .fitem.on { background:var(--pri2); color:var(--pri); font-weight:600; }
+  #fexp .fitem .fic { opacity:.6; }
+  #fexp .fitem small { margin-left:auto; color:var(--mut); font-size:.7rem; }
+  #edcol { flex:1; display:flex; flex-direction:column; min-width:0; }
+  /* ---- trace: dependencies AS formulas ---- */
+  #pageTrace .twrap { flex:1; overflow:auto; padding:1.1rem 1.3rem; }
+  .tnode { border-left:2px solid var(--line); margin:.3rem 0 .3rem .35rem; padding:.25rem 0 .25rem .8rem; }
+  .tnode.root { border-left-color:var(--pri); }
+  .tline { display:flex; align-items:baseline; gap:.55rem; flex-wrap:wrap; }
+  .tname { font-family:var(--mono); font-weight:700; font-size:.9rem; color:var(--navy2); }
+  .tval { margin-left:auto; font-family:var(--mono); font-variant-numeric:tabular-nums;
+    font-weight:600; white-space:nowrap; }
+  .tunit { color:var(--mut); font-size:.74rem; }
+  .tformula { font-family:var(--mono); font-size:.86rem; color:#333c4b; margin-top:.1rem;
+    line-height:1.7; word-break:break-word; }
+  .tformula .tref { background:var(--pri2); color:var(--pri); border-radius:5px;
+    padding:.04rem .3rem; cursor:pointer; font-weight:600; }
+  .tformula .tref:hover { background:#d7e4fa; }
+  .tformula .tref.openref { background:var(--navy2); color:#fff; }
+  .tnote { color:var(--mut); font-size:.76rem; margin-top:.1rem; }
+  .tkids { margin-top:.2rem; }
+  /* ---- team & access page ---- */
+  #pageTeam .twrap2 { flex:1; overflow:auto; padding:1.1rem 1.3rem; }
   /* ---- the code editor (mono lives here) ---- */
-  #left { display:flex; flex-direction:column; min-height:0; background:var(--card);
-    border-right:1px solid var(--line); }
+  #left { flex:1; display:flex; flex-direction:column; min-height:0; background:var(--card); }
   #ftabs { display:flex; gap:0; padding:0 .5rem; background:#eef1f6; border-bottom:1px solid var(--line); }
   #ftabs button { background:transparent; color:var(--mut); border:0; border-radius:0;
     font-size:.76rem; font-weight:500; padding:.4rem .8rem; border-bottom:2px solid transparent; }
@@ -212,11 +236,8 @@
   #hint { color:var(--mut); font-size:.74rem; }
   #stats { margin-left:auto; color:var(--mut); font-size:.78rem; } #stats b { color:var(--ok); }
 
-  /* ---- the model view: includes, architecture, roll-up, access ---- */
-  body.view-model main { grid-template-columns: 1fr !important; }
-  body.view-model #left, body.view-model #split, body.view-model #right { display:none; }
-  #modelPane { display:none; overflow:auto; min-height:0; background:var(--bg); padding:1.1rem 1.3rem; }
-  body.view-model #modelPane { display:block; }
+  /* ---- the model view (Overview page) ---- */
+  #modelPane { flex:1; overflow:auto; min-height:0; background:var(--bg); padding:1.1rem 1.3rem; }
   .mcard { background:var(--card); border:1px solid var(--line); border-radius:10px;
     padding:.9rem 1.1rem; margin-bottom:1rem; box-shadow:0 1px 2px rgba(16,30,54,.04); }
   .mcard h3 { margin:.1rem 0 .6rem; font-size:.74rem; color:var(--mut);
@@ -301,73 +322,80 @@
 </style>
 </head>
 <body>
-<header>
-  <div class="brand">Workbench<small>powered by fml</small></div>
+<aside id="side">
+  <div class="logo">Workbench<small>powered by fml</small></div>
   <select id="modelSel" title="Model"></select>
-  <nav id="menubar">
-    <span class="actions">
-      <div class="menu">
-        <button class="mbtn">File</button>
-        <div class="mdrop">
-          <button id="saveBtn" title="Save the active file to disk">Save to disk…<span class="mkey">⌘S</span></button>
-          <span id="draftState" class="minfo"></span>
-        </div>
-      </div>
-      <div class="menu">
-        <button class="mbtn">Model</button>
-        <div class="mdrop">
-          <button id="simBtn" title="Monte Carlo over distribution inputs (500 trials)">Simulate uncertainty</button>
-          <div class="msep"></div>
-          <button id="addPeriodBtn" title="Extend the calendar by one period (full-range maps copy their last entry)">Add period</button>
-          <button id="addMemberBtn" data-keep="1" title="Add a member to a dimension (arms inserted into every match)" style="display:none">Add member…</button>
-          <span id="amForm" class="minfo" style="display:none"></span>
-        </div>
-      </div>
-    </span>
-    <div class="menu" id="scenMenu" style="display:none">
-      <button class="mbtn" id="scenMenuLbl">Scenario</button>
-      <div class="mdrop"><span id="scen"></span></div>
-    </div>
-    <div class="menu">
-      <button class="mbtn">View</button>
-      <div class="mdrop">
-        <span class="views" id="views" title="Layout">
-          <button data-v="code">Code</button>
-          <button data-v="split" class="on">Split</button>
-          <button data-v="grid">Grid</button>
-          <button data-v="model">Model</button>
-        </span>
-      </div>
-    </div>
+  <nav>
+    <a data-p="overview" class="on"><span class="ic">◧</span>Overview</a>
+    <a data-p="budget"><span class="ic">▦</span>Budget</a>
+    <a data-p="trace"><span class="ic">⇄</span>Formulas</a>
+    <a data-p="files"><span class="ic">☰</span>Files</a>
+    <a data-p="team"><span class="ic">⚙</span>Team &amp; access</a>
   </nav>
-  <div class="menu right" id="checksMenu">
-    <button class="mbtn" id="checksLbl" title="Model checks — every assert, every period">Checks</button>
-    <div class="mdrop rt"><span id="asserts"></span></div>
+  <div class="whoami" id="whoBox"><b>Local sandbox</b>full modelling access</div>
+</aside>
+<div id="maincol">
+  <div id="topbar">
+    <span id="crumb">Overview</span>
+    <span id="scenTag" style="display:none"></span>
+    <div class="menu" id="checksMenu">
+      <button id="checksLbl" title="Model checks — every assert, every period">Checks</button>
+      <div class="mdrop"><span id="asserts"></span></div>
+    </div>
   </div>
-</header>
-<div id="scenBanner" style="display:none"></div>
-<div id="procBanner" style="display:none"></div>
-<main>
-  <div id="left">
-    <div id="ftabs" style="display:none"></div>
-    <div id="edwrap">
-      <div id="gutter">1</div>
-      <div id="edstack">
-        <pre id="hl"><code id="hlcode"></code></pre>
-        <textarea id="src" spellcheck="false" wrap="off"></textarea>
-        <div id="comp" style="display:none"></div>
+  <div id="scenBanner" style="display:none"></div>
+  <div id="procBanner" style="display:none"></div>
+  <div id="pages">
+    <div class="page on" id="pageOverview"><div id="modelPane"></div></div>
+    <div class="page" id="pageBudget">
+      <div class="toolbar">
+        <span class="tlbl">Scenario</span><span id="scen"></span>
+        <span style="flex:1"></span>
+        <button id="simBtn" title="Monte Carlo over distribution inputs (500 trials)">Simulate uncertainty</button>
+        <button id="addPeriodBtn" title="Extend the calendar by one period">Add period</button>
+        <button id="addMemberBtn" title="Add a member to a dimension" style="display:none">Add member…</button>
+        <span id="amForm" style="display:none"></span>
+      </div>
+      <div id="right"><table id="tbl"></table></div>
+    </div>
+    <div class="page" id="pageTrace">
+      <div class="toolbar"><span class="tlbl">Trace</span>
+        <select id="traceSel" style="min-width:14em"></select>
+        <span class="tlbl" style="margin-left:.6rem">click any name in a formula to unfold it</span>
+      </div>
+      <div class="twrap"><div id="traceTree" class="mcard">pick a measure to trace</div></div>
+    </div>
+    <div class="page" id="pageFiles">
+      <div class="toolbar">
+        <span id="ftabs" style="display:none"></span>
+        <span style="flex:1"></span>
+        <span id="draftState"></span>
+        <button id="saveBtn" title="Save the active file to disk (Ctrl/Cmd+S)">Save to disk</button>
+      </div>
+      <div class="fbody">
+        <div id="fexp"></div>
+        <div id="edcol">
+          <div id="left">
+            <div id="edwrap">
+              <div id="gutter">1</div>
+              <div id="edstack">
+                <pre id="hl"><code id="hlcode"></code></pre>
+                <textarea id="src" spellcheck="false" wrap="off"></textarea>
+                <div id="comp" style="display:none"></div>
+              </div>
+            </div>
+          </div>
+          <div id="err"></div>
+        </div>
       </div>
     </div>
-    <div id="err"></div>
+    <div class="page" id="pageTeam"><div class="twrap2" id="teamPane"></div></div>
   </div>
-  <div id="split" title="Drag to resize"></div>
-  <div id="right"><table id="tbl"></table></div>
-  <div id="modelPane"></div>
-</main>
-<div id="foot">
-  <span><span class="lbl">scalars</span><span id="scalars"></span></span>
-  <span id="hint">click a cell to explain · click a name to inspect/rename · Ctrl+Space completes</span>
-  <span id="stats">loading…</span>
+  <div id="foot">
+    <span><span class="lbl">scalars</span><span id="scalars"></span></span>
+    <span id="hint">click a cell to explain · click a name to inspect/rename · Ctrl+Space completes</span>
+    <span id="stats">loading…</span>
+  </div>
 </div>
 <script type="module">
 const MODELS = ["industrial_budget"];
@@ -611,7 +639,12 @@ function render(r) {
     `<span${SERVER ? "" : ` class="scx" data-s="${s.name}" title="click: explain this number" style="cursor:pointer"`}>${s.name} = <b>${fmt(s.val)}</b><span class="unit">${s.unit}</span></span>`).join("");
   document.querySelectorAll("#scalars .scx").forEach(sp =>
     sp.addEventListener("click", () => inspect(sp.dataset.s, "", null, false)));
-  if (document.body.classList.contains("view-model")) renderModel();
+  if (PAGE === "overview") renderModel();
+  if (PAGE === "trace") renderTrace(true);
+  const st = document.getElementById("scenTag");
+  const sc = r.active && r.active !== "Base" ? r.active : null;
+  st.style.display = sc ? "" : "none";
+  if (sc) st.textContent = "scenario · " + sc;
   document.querySelectorAll("td.torn").forEach(td => {
     td.addEventListener("click", () => {
       inspect(td.dataset.tkey, td.dataset.tmember || "", Number(td.dataset.tt), false);
@@ -955,7 +988,6 @@ function showNodeDetail(info, name) {
   el.querySelector(".mdef").addEventListener("click", e => {
     e.preventDefault();
     if (SERVER) return; // client sees the expanded source, no per-file tabs
-    setView("code");
     gotoDef(el.querySelector(".mdef").dataset.file, Number(el.querySelector(".mdef").dataset.line));
   });
 }
@@ -1057,7 +1089,7 @@ async function renderModel() {
     g.addEventListener("click", () => showNodeDetail(info, g.dataset.n));
     g.addEventListener("dblclick", () => {
       const m = info.measures.find(x => x.name === g.dataset.n) || info.asserts.find(x => x.name === g.dataset.n);
-      if (m && !SERVER) { setView("code"); gotoDef(m.file, m.line); }
+      if (m && !SERVER) { setPage("files"); gotoDef(m.file, m.line); }
     });
   });
   pane.querySelectorAll(".ftree .fname.link").forEach(el => el.addEventListener("click", () => {
@@ -1068,55 +1100,181 @@ async function renderModel() {
     renderTabs();
     updateDraftState();
     renderHl();
-    setView("code");
+    setPage("files");
   }));
 }
 
-// ---- menu bar: one menu open at a time; items close on activation ----
-document.querySelectorAll("header .menu > .mbtn").forEach(btn => {
-  btn.addEventListener("click", e => {
-    e.stopPropagation();
-    const m = btn.parentElement;
-    const was = m.classList.contains("open");
-    document.querySelectorAll("header .menu.open").forEach(x => x.classList.remove("open"));
-    if (!was) m.classList.add("open");
-  });
+// ---- checks dropdown ----
+document.getElementById("checksLbl").addEventListener("click", e => {
+  e.stopPropagation();
+  document.getElementById("checksMenu").classList.toggle("open");
 });
-const closeMenus = () =>
-  document.querySelectorAll("header .menu.open").forEach(x => x.classList.remove("open"));
 document.addEventListener("click", e => {
-  if (!e.target.closest("header .menu")) { closeMenus(); return; }
-  const it = e.target.closest("header .mdrop button");
-  if (it && !it.dataset.keep) closeMenus();
+  if (!e.target.closest("#checksMenu")) {
+    document.getElementById("checksMenu").classList.remove("open");
+  }
 });
-document.addEventListener("keydown", e => { if (e.key === "Escape") closeMenus(); });
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape") document.getElementById("checksMenu").classList.remove("open");
+});
 
-// ---- layout: code / split / grid / model views + draggable divider ----
-// (wired before the client-mode fork so connected users get the views too)
-function setView(v) {
-  document.body.classList.remove("view-code", "view-grid", "view-model");
-  if (v !== "split") document.body.classList.add("view-" + v);
-  document.querySelectorAll("#views button").forEach(b => b.classList.toggle("on", b.dataset.v === v));
-  localStorage.setItem("fml:view", v);
-  if (v === "model") renderModel();
+// ---- pages: sidebar navigation ----
+// (wired before the client-mode fork so connected users get every page)
+let PAGE = "overview";
+const PAGE_TITLES = { overview: "Overview", budget: "Budget", trace: "Formulas",
+  files: "Files", team: "Team & access" };
+function setPage(p) {
+  PAGE = p;
+  document.querySelectorAll("#pages .page").forEach(el =>
+    el.classList.toggle("on", el.id === "page" + p[0].toUpperCase() + p.slice(1)));
+  document.querySelectorAll("#side nav a").forEach(x =>
+    x.classList.toggle("on", x.dataset.p === p));
+  document.getElementById("crumb").textContent = PAGE_TITLES[p] || p;
+  localStorage.setItem("fml:page", p);
+  if (p === "overview") renderModel();
+  if (p === "trace") renderTrace();
+  if (p === "files") { renderExplorer(); renderHl(); }
+  if (p === "team") window.renderTeamPage();
 }
-document.querySelectorAll("#views button").forEach(b =>
-  b.addEventListener("click", () => setView(b.dataset.v)));
-setView(localStorage.getItem("fml:view") || "split");
-const mainEl = document.querySelector("main");
-const savedSplit = localStorage.getItem("fml:splitpx");
-if (savedSplit) mainEl.style.gridTemplateColumns = `${savedSplit}px 6px 1fr`;
-document.getElementById("split").addEventListener("mousedown", e => {
-  e.preventDefault();
-  const move = ev => {
-    const px = Math.max(240, Math.min(ev.clientX, window.innerWidth - 320));
-    mainEl.style.gridTemplateColumns = `${px}px 6px 1fr`;
-    localStorage.setItem("fml:splitpx", px);
-  };
-  const up = () => { window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up); };
-  window.addEventListener("mousemove", move);
-  window.addEventListener("mouseup", up);
-});
+document.querySelectorAll("#side nav a").forEach(x =>
+  x.addEventListener("click", () => setPage(x.dataset.p)));
+
+// ---- the formula trace: dependencies AS formulas ----------------------
+let traceInfo = null, traceOpen = new Set(), traceRoot = null;
+function fyText(name) {
+  const s = (lastState?.series || []).filter(r => r.key === name);
+  if (s.length) {
+    const unit = s[0].unit || "";
+    // Prices/rates/ratios don't add across periods — show the latest
+    // in-range value; flows and stocks show the full-year total.
+    if (unit.includes("/") || unit === "1" || unit === "") {
+      const t = s[0].range[1];
+      return { v: fmt(s[0].vals[t]), u: unit + " · " + (lastState.periods[t] || "") };
+    }
+    const fy = s.reduce((a, r) => a + r.vals.reduce((x, v) => x + (v || 0), 0), 0);
+    return { v: fmt(fy), u: unit + " · FY" };
+  }
+  const sc = (lastState?.scalars || []).find(x => x.name === name);
+  if (sc) return { v: fmt(sc.val), u: sc.unit || "" };
+  return null;
+}
+function formulaHtml(m, byName) {
+  if (m.data) return `<span class="tnote">facts from <b>${escM(m.data)}</b> — read-only, changes by re-import</span>`;
+  if (m.dist) return `<span class="tnote">stochastic input (distribution; simulate draws it)</span>`;
+  let f = m.formula;
+  if (f === null || f === undefined) return `<span class="tnote">source value</span>`;
+  const parts = escM(f).split(/([A-Za-z_$][A-Za-z0-9_]*)/g);
+  const html = parts.map(p =>
+    byName[p] && p !== m.name
+      ? `<span class="tref${traceOpen.has(m.name + "→" + p) ? " openref" : ""}" data-of="${escM(m.name)}" data-n="${escM(p)}">${p}</span>`
+      : p).join("");
+  return html;
+}
+function traceNode(name, byName, seen, root) {
+  const m = byName[name];
+  if (!m) return "";
+  const val = fyText(name);
+  const kids = (m.refs || []).filter(r => traceOpen.has(name + "→" + r) && !seen.has(r));
+  const kidHtml = kids.map(r => {
+    const s2 = new Set(seen);
+    s2.add(r);
+    return traceNode(r, byName, s2, false);
+  }).join("");
+  const tag = m.input ? (m.data ? "fact" : "input") : m.solve ? "solve" : "";
+  return `<div class="tnode${root ? " root" : ""}">
+    <div class="tline"><span class="tname">${escM(name)}</span>
+      ${tag ? `<span class="chip">${tag}</span>` : ""}
+      ${val ? `<span class="tval">${val.v}<span class="tunit"> ${escM(val.u)}</span></span>` : ""}</div>
+    <div class="tformula">= ${formulaHtml(m, byName)}</div>
+    ${kidHtml ? `<div class="tkids">${kidHtml}</div>` : ""}</div>`;
+}
+async function renderTrace(keep) {
+  const sel = document.getElementById("traceSel");
+  const tree = document.getElementById("traceTree");
+  const info = await fetchModelInfo();
+  if (!info || !info.ok) { tree.innerHTML = "model not loaded yet"; return; }
+  traceInfo = info;
+  const byName = {};
+  info.measures.forEach(m => byName[m.name] = m);
+  const computed = info.measures.filter(m => !m.input).map(m => m.name);
+  const options = [...computed, ...info.measures.filter(m => m.input).map(m => m.name)];
+  if (!keep || !sel.options.length) {
+    const prev = traceRoot;
+    sel.innerHTML = options.map(n =>
+      `<option${n === prev ? " selected" : ""}>${escM(n)}</option>`).join("");
+    if (!traceRoot || !byName[traceRoot]) traceRoot = computed[computed.length - 1] || options[0];
+    sel.value = traceRoot;
+    sel.onchange = () => { traceRoot = sel.value; traceOpen.clear(); renderTrace(true); };
+  }
+  tree.innerHTML = traceNode(traceRoot, byName, new Set([traceRoot]), true)
+    || "pick a measure to trace";
+  tree.querySelectorAll(".tref").forEach(el => el.addEventListener("click", () => {
+    const key = el.dataset.of + "→" + el.dataset.n;
+    if (traceOpen.has(key)) traceOpen.delete(key); else traceOpen.add(key);
+    renderTrace(true);
+  }));
+}
+
+// ---- the file explorer: everything organized in folders ----------------
+async function renderExplorer() {
+  const box = document.getElementById("fexp");
+  const info = await fetchModelInfo();
+  if (!info || !info.ok) { box.innerHTML = ""; return; }
+  const master = info.files.length ? info.files[0].name : "";
+  const isLib = f => f.decls.length > 0 && f.decls.every(d => d.kind === "def");
+  const dataFiles = [...new Set(info.measures.map(m => m.data).filter(Boolean))];
+  const item = (name, ic, sub, clickable) =>
+    `<div class="fitem${fileDisp(name) === activeFile ? " on" : ""}${clickable ? "" : " ro"}"
+       data-f="${escM(name)}" style="${clickable ? "" : "cursor:default"}">
+       <span class="fic">${ic}</span>${escM(fileDisp(name))}${sub ? `<small>${sub}</small>` : ""}</div>`;
+  const canOpen = n => !SERVER && fileTexts[fileDisp(n)] !== undefined;
+  let html = `<h4>Model</h4>` + item(master, "▤", "master", canOpen(master));
+  const dept = info.files.slice(1).filter(f => !isLib(f));
+  if (dept.length) {
+    html += `<h4>Departments</h4>` +
+      dept.map(f => item(f.name, "▦", `${f.decls.length} decls`, canOpen(f.name))).join("");
+  }
+  const libs = info.files.slice(1).filter(isLib);
+  if (libs.length) {
+    html += `<h4>Libraries</h4>` +
+      libs.map(f => item(f.name, "ƒ", `${f.decls.length} defs`, canOpen(f.name))).join("");
+  }
+  if (dataFiles.length) {
+    html += `<h4>Facts (data)</h4>` +
+      dataFiles.map(n => item(n, "◫", "csv", canOpen(n))).join("");
+  }
+  if (SERVER) {
+    html += `<div class="tnote" style="margin:.6rem .4rem">connected mode shows the
+      assembled model source (read-only)</div>`;
+  }
+  box.innerHTML = html;
+  box.querySelectorAll(".fitem:not(.ro)").forEach(el => el.addEventListener("click", () => {
+    const n = fileDisp(el.dataset.f);
+    if (fileTexts[n] === undefined) return;
+    activeFile = n;
+    srcBox.value = fileTexts[n];
+    renderTabs();
+    updateDraftState();
+    renderHl();
+    renderExplorer();
+  }));
+}
+
+// ---- team & access (local fallback; client mode overrides) -------------
+window.renderTeamPage = function () {
+  document.getElementById("teamPane").innerHTML = `
+    <div class="mcard"><h3>Team, roles &amp; permissions</h3>
+      <div class="mnote">You are in the <b>local sandbox</b> — full modelling access, no
+      accounts. User management lives on the <b>budget server</b>: departments read only
+      their models, editors write only the input cells they hold grants for (formulas are
+      admin-only, structurally), and every change lands in a signed audit log.</div>
+      <div class="mnote" style="margin-top:.6rem">To manage people, connect as an
+      administrator:<br><code>?server=http://…&amp;token=&lt;admin token&gt;</code> — the
+      Team page then shows people, write grants, round control, the audit timeline and
+      checkpoint. Accounts are declared in <code>users.cfg</code> / <code>access.cfg</code>
+      in the server's config directory.</div></div>`;
+};
+setPage(localStorage.getItem("fml:page") || "overview");
 
 if (SERVER && !TOKEN) {
   // ---- landing: ask for the access token ----
@@ -1138,10 +1296,18 @@ if (SERVER && !TOKEN) {
 if (SERVER) {
   // ---- connected client: the budget process, server-evaluated ----
   document.title = `fml · ${USER}`;
-  document.querySelector("header .actions").style.display = "none";
+  // Local-only controls: simulation/structural edits/saving need the wasm
+  // session; connected sessions work through the server instead.
+  for (const id of ["simBtn", "addPeriodBtn", "addMemberBtn", "saveBtn"]) {
+    const el = document.getElementById(id);
+    if (el) el.style.display = "none";
+  }
+  document.getElementById("scen").style.display = "none";
+  document.querySelector("#pageBudget .tlbl").style.display = "none";
   document.getElementById("src").readOnly = true;
   let ME = { user: USER, dept: "?", role: "viewer" };
   window.clientMe = () => ME;
+  const whoBox = document.getElementById("whoBox");
   let clientModel = PARAMS.get("model") || null;
   let proc = { locked: false, submitted: [] };
   const qs = () => `?token=${encodeURIComponent(TOKEN)}&model=${encodeURIComponent(clientModel)}`;
@@ -1190,17 +1356,38 @@ if (SERVER) {
       if (!r.ok) { setErr(r.error); return; }
       await refreshFromServer(0, "budget locked");
     });
-    b.querySelector("#pManage")?.addEventListener("click", openAdmin);
+    b.querySelector("#pManage")?.addEventListener("click", () => setPage("team"));
   }
-  async function openAdmin() {
-    document.getElementById("admin")?.remove();
-    const div = document.createElement("div");
-    div.id = "admin";
+  window.renderTeamPage = async function () {
+    const pane = document.getElementById("teamPane");
+    if (ME.role !== "admin") {
+      const g = await (await fetch(SERVER + "/grants" + qs())).json();
+      const mine = g.ok ? (g.users.find(u => u.user === ME.user) || { grants: [] }).grants : [];
+      const w = ME.role === "viewer" ? '<span class="chip">read-only</span>'
+        : mine.some(x => x.measure === "*") ? '<span class="chip all">every measure</span>'
+        : mine.map(x => `<span class="chip amber">${x.measure}${x.member ? "[" + x.member + "]" : ""}</span>`).join("") || "—";
+      pane.innerHTML = `<div class="mcard"><h3>Your access</h3>
+        <div class="mnote"><b>${ME.user}</b> · ${ME.dept} · ${ME.role}</div>
+        <div class="mnote" style="margin-top:.4rem"><b>you may write</b> — input cells of:</div>${w}
+        <div class="mnote" style="margin-top:.5rem">write grants reach only literal input cells;
+        formulas and facts are managed by finance. Ask an administrator to change your access.</div></div>`;
+      return;
+    }
     const users = await (await fetch(SERVER + "/users?token=" + encodeURIComponent(TOKEN))).json();
+    const g = await (await fetch(SERVER + "/grants" + qs())).json();
     const logR = await (await fetch(SERVER + "/log" + qs())).json();
+    const grantsOf = u => {
+      const gu = (g.users || []).find(x => x.user === u);
+      if (!gu) return "—";
+      const found = (users.users || []).find(x => x.user === u);
+      if (found && found.role === "viewer") return '<span class="chip">read-only</span>';
+      return gu.grants.some(x => x.measure === "*") ? '<span class="chip all">every measure</span>'
+        : gu.grants.map(x => `<span class="chip amber">${x.measure}${x.member ? "[" + x.member + "]" : ""}</span>`).join("") || "—";
+    };
     const rows = (users.users || []).map(u =>
-      `<tr><td>${u.user}</td><td>${u.dept}</td><td class="role-${u.role}">${u.role}</td>
-       <td><button class="mint" data-u="${u.user}">mint token</button></td></tr>`).join("");
+      `<tr><td>${u.user}</td><td style="text-transform:capitalize">${u.dept}</td>
+       <td class="role-${u.role}">${u.role}</td><td>${grantsOf(u.user)}</td>
+       <td><button class="mint" data-u="${u.user}">Issue token</button></td></tr>`).join("");
     const events = (logR.log || "").trim().split("\n").filter(Boolean).map(l => {
       const f = l.split("\t");
       if (f.length < 9) return null;
@@ -1211,39 +1398,69 @@ if (SERVER) {
         : kind === "formula" ? `${name} = …` : name !== "-" ? name : "";
       return `<tr><td>${seq}</td><td>${when}</td><td>${who}</td><td class="k-${kind}">${kind}</td><td>${what}</td></tr>`;
     }).filter(Boolean).reverse().slice(0, 40).join("");
-    div.innerHTML = `<span class="close">✕</span><h3>manage · ${clientModel}</h3>
-      <h4>people</h4>
-      <table><tr><th>user</th><th>department</th><th>role</th><th></th></tr>${rows}</table>
-      <div id="mintOut"></div>
-      <h4>audit log <small style="opacity:.5">(latest first, signed chain)</small></h4>
-      <table><tr><th>#</th><th>when</th><th>who</th><th>action</th><th>what</th></tr>${events || "<tr><td colspan=5>no events yet</td></tr>"}</table>
-      <h4>round persistence</h4>
-      <p style="font-size:.82em;opacity:.8">Checkpoint writes the current numbers back to the model files,
-      archives the signed log, and starts the next round on that baseline. Typically done after lock.</p>
-      <button id="ckBtn">checkpoint this model</button> <span id="ckOut"></span>`;
-    document.body.appendChild(div);
-    div.querySelector(".close").addEventListener("click", () => div.remove());
-    div.querySelectorAll(".mint").forEach(btn => btn.addEventListener("click", async () => {
+    pane.innerHTML = `
+      <div class="mcard"><h3>People, roles &amp; write grants · ${clientModel}</h3>
+        <table class="mtable"><tr><th>user</th><th>department</th><th>role</th><th>may write</th><th></th></tr>${rows}</table>
+        <div id="mintOut"></div>
+        <div class="mnote" style="margin-top:.4rem">departments read only their models; editors
+        write only granted input cells — formulas are admin-only, structurally. Accounts are
+        declared in <code>users.cfg</code> / <code>access.cfg</code>; restart the server after editing.</div></div>
+      <div class="mcard"><h3>Round control</h3>
+        <div class="toolbar" style="border:0;padding:.2rem 0">
+          ${proc.locked ? '<button id="tUnlock">Unlock the budget</button>'
+                        : '<button id="tLock">Lock the budget</button>'}
+          ${proc.submitted.map(d => `<button class="tReopen" data-d="${d}">Reopen ${d}</button>`).join("")}
+          <span class="mnote">${proc.locked ? "the budget is final" :
+            proc.submitted.length ? proc.submitted.join(", ") + " submitted" : "round open"}</span>
+        </div></div>
+      <div class="mcard"><h3>Audit log <small style="opacity:.5">(latest first, signed chain)</small></h3>
+        <table class="mtable"><tr><th>#</th><th>when</th><th>who</th><th>action</th><th>what</th></tr>
+        ${events || "<tr><td colspan=5>no events yet</td></tr>"}</table></div>
+      <div class="mcard"><h3>Round persistence</h3>
+        <div class="mnote">Checkpoint writes the approved numbers back into the model files,
+        archives the signed audit log, and opens the next round on that baseline. Typically run after locking.</div>
+        <button id="ckBtn" style="margin-top:.4rem">Checkpoint this model</button> <span id="ckOut" class="mnote"></span></div>`;
+    pane.querySelectorAll(".mint").forEach(btn => btn.addEventListener("click", async () => {
       const r = await post("/mint", { user: btn.dataset.u });
       document.getElementById("mintOut").innerHTML = r.ok
-        ? `<p style="font-size:.82em">token for <b>${btn.dataset.u}</b> — send it to them privately:<br>
-           <input readonly value="${r.token}" onclick="this.select()"></p>`
+        ? `<p style="font-size:.82em">token for <b>${btn.dataset.u}</b> — send it privately:<br>
+           <input readonly style="width:100%;font:.78rem var(--mono)" value="${r.token}" onclick="this.select()"></p>`
         : `<p style="color:var(--bad)">${r.error}</p>`;
     }));
-    div.querySelector("#ckBtn").addEventListener("click", async () => {
+    pane.querySelector("#tLock")?.addEventListener("click", async () => {
+      const r = await post("/lock");
+      if (!r.ok) { setErr(r.error); return; }
+      await refreshFromServer(0, "budget locked");
+      window.renderTeamPage();
+    });
+    pane.querySelector("#tUnlock")?.addEventListener("click", async () => {
+      const r = await post("/reopen", { dept: "" });
+      if (!r.ok) { setErr(r.error); return; }
+      await refreshFromServer(0, "unlocked");
+      window.renderTeamPage();
+    });
+    pane.querySelectorAll(".tReopen").forEach(btn => btn.addEventListener("click", async () => {
+      const r = await post("/reopen", { dept: btn.dataset.d });
+      if (!r.ok) { setErr(r.error); return; }
+      await refreshFromServer(0, "reopened " + btn.dataset.d);
+      window.renderTeamPage();
+    }));
+    pane.querySelector("#ckBtn").addEventListener("click", async () => {
       const r = await post("/checkpoint");
       document.getElementById("ckOut").textContent = r.ok
-        ? `✓ written: ${r.files.join(", ")} · log archived`
+        ? `✓ written: ${r.files.join(", ")} · log archived · new round open`
         : r.error;
       if (r.ok) await refreshFromServer(0, "checkpointed — new round");
     });
-  }
+  };
   window.refreshProcFromState = r => {
     if (r.process) { proc = r.process; renderProc(); }
   };
   const mi = await (await fetch(SERVER + "/models?token=" + encodeURIComponent(TOKEN))).json();
   if (!mi.ok) { setErr(mi.error || "cannot reach server"); throw new Error("boot failed"); }
   ME = mi.me;
+  whoBox.innerHTML = `<b>${ME.user}</b>${ME.dept} · ${ME.role}`;
+  if (PAGE === "team") window.renderTeamPage();
   const msel0 = document.getElementById("modelSel");
   msel0.innerHTML = "";
   for (const m of mi.models) {
@@ -1308,6 +1525,7 @@ function leverOptions() {
   return opts;
 }
 function gotoDef(file, line) {
+  if (!SERVER) setPage("files");
   const key = file === "main" || file === "model" ? mainFile() : file;
   if (fileTexts[key] !== undefined && key !== activeFile) {
     activeFile = key;
