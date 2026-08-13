@@ -252,6 +252,8 @@
   .chip.all { background:#f3e8fd; color:#7b3ff2; font-weight:600; }
   .chip.okc { background:var(--okbg); color:var(--ok); } .chip.badc { background:var(--badbg); color:var(--bad); }
   .mnote { color:var(--mut); font-size:.78rem; margin:.15rem 0 .4rem; }
+  .hx { font-family:var(--mono); font-size:.76rem; color:#333c4b; background:#fafbfd;
+    border:1px solid var(--line); border-radius:6px; padding:.35rem .55rem; white-space:pre-wrap; }
   .ftree ul { list-style:none; margin:.15rem 0 .15rem .55rem; padding-left:.9rem;
     border-left:1px dashed var(--line); }
   .ftree > ul { margin-left:0; padding-left:0; border-left:0; }
@@ -283,6 +285,12 @@
   #mdetail .box { border-top:2px solid var(--line); padding-top:.5rem; font-size:.84rem; }
   #mdetail b.nm { font-family:var(--mono); font-size:.9rem; }
   #mdetail a { color:var(--pri); text-decoration:none; }
+
+  /* ---- toast (action feedback; errors that must be seen anywhere) ---- */
+  #toast { position:fixed; bottom:1.2rem; right:1.4rem; background:var(--navy); color:#fff;
+    padding:.6rem 1.1rem; border-radius:8px; font-size:.88rem;
+    box-shadow:0 6px 24px rgba(0,0,0,.25); display:none; z-index:50; max-width:440px; }
+  #toast.bad { background:var(--bad); }
 
   /* ---- editor hover documentation ---- */
   #hovertip { position:fixed; z-index:40; max-width:380px; background:var(--card);
@@ -343,6 +351,7 @@
     <a data-p="overview" class="on"><span class="ic">◧</span>Overview</a>
     <a data-p="budget"><span class="ic">▦</span>Budget</a>
     <a data-p="trace"><span class="ic">⇄</span>Formulas</a>
+    <a data-p="simulation"><span class="ic">∿</span>Simulation</a>
     <a data-p="files"><span class="ic">☰</span>Files</a>
     <a data-p="team"><span class="ic">⚙</span>Team &amp; access</a>
   </nav>
@@ -365,7 +374,6 @@
       <div class="toolbar">
         <span class="tlbl">Scenario</span><span id="scen"></span>
         <span style="flex:1"></span>
-        <button id="simBtn" title="Monte Carlo over distribution inputs (500 trials)">Simulate uncertainty</button>
         <button id="addPeriodBtn" title="Extend the calendar by one period">Add period</button>
         <button id="addMemberBtn" title="Add a member to a dimension" style="display:none">Add member…</button>
         <span id="amForm" style="display:none"></span>
@@ -379,6 +387,7 @@
       </div>
       <div class="twrap"><div id="traceTree" class="mcard">pick a measure to trace</div></div>
     </div>
+    <div class="page" id="pageSimulation"><div class="twrap2" id="simPane"></div></div>
     <div class="page" id="pageFiles">
       <div class="toolbar">
         <span id="ftabs" style="display:none"></span>
@@ -406,6 +415,7 @@
     <div class="page" id="pageTeam"><div class="twrap2" id="teamPane"></div></div>
   </div>
   <div id="hovertip"></div>
+  <div id="toast"></div>
   <div id="foot">
     <span><span class="lbl">scalars</span><span id="scalars"></span></span>
     <span id="hint">click a cell to explain · click a name to inspect/rename · Ctrl+Space completes</span>
@@ -685,10 +695,11 @@ function render(r) {
           period: inp.dataset.t, value: String(v) }) })
           .then(r => r.json())
           .then(async r => {
-            if (!r.ok) { setErr(r.error); return; }
+            if (!r.ok) { toast(r.error, true); return; }
             await refreshFromServer((performance.now() - t0) * 1000, "commit #" + r.seq);
+            toast("saved · commit #" + r.seq);
           })
-          .catch(e => setErr(String(e)));
+          .catch(e => toast(String(e), true));
         return;
       }
       writeInput(inp.dataset.member ? inp.dataset.key + "|" + inp.dataset.member : inp.dataset.key);
@@ -1265,6 +1276,16 @@ function wordDocHtml(word) {
   src.addEventListener("keydown", hideTip);
 })();
 
+// ---- toast: feedback that is visible on EVERY page ----
+function toast(msg, bad) {
+  const el = document.getElementById("toast");
+  el.textContent = msg;
+  el.className = bad ? "bad" : "";
+  el.style.display = "block";
+  clearTimeout(el._h);
+  el._h = setTimeout(() => el.style.display = "none", bad ? 5200 : 2600);
+}
+
 // ---- checks dropdown ----
 document.getElementById("checksLbl").addEventListener("click", e => {
   e.stopPropagation();
@@ -1283,7 +1304,7 @@ document.addEventListener("keydown", e => {
 // (wired before the client-mode fork so connected users get every page)
 let PAGE = "overview";
 const PAGE_TITLES = { overview: "Overview", budget: "Budget", trace: "Formulas",
-  files: "Files", team: "Team & access" };
+  simulation: "Simulation", files: "Files", team: "Team & access" };
 function setPage(p) {
   PAGE = p;
   document.querySelectorAll("#pages .page").forEach(el =>
@@ -1294,6 +1315,7 @@ function setPage(p) {
   localStorage.setItem("fml:page", p);
   if (p === "overview") renderModel();
   if (p === "trace") renderTrace();
+  if (p === "simulation") renderSimulation();
   if (p === "files") { renderExplorer(); renderHl(); }
   if (p === "team") window.renderTeamPage();
 }
@@ -1459,7 +1481,7 @@ if (SERVER) {
   document.title = `fml · ${USER}`;
   // Local-only controls: simulation/structural edits/saving need the wasm
   // session; connected sessions work through the server instead.
-  for (const id of ["simBtn", "addPeriodBtn", "addMemberBtn", "saveBtn"]) {
+  for (const id of ["addPeriodBtn", "addMemberBtn", "saveBtn"]) {
     const el = document.getElementById(id);
     if (el) el.style.display = "none";
   }
@@ -1504,17 +1526,17 @@ if (SERVER) {
     b.innerHTML = html;
     b.querySelector("#pSubmit")?.addEventListener("click", async () => {
       const r = await post("/submit");
-      if (!r.ok) { setErr(r.error); return; }
+      if (!r.ok) { toast(r.error, true); return; }
       await refreshFromServer(0, `${ME.dept} submitted`);
     });
     b.querySelectorAll(".pReopen").forEach(btn => btn.addEventListener("click", async () => {
       const r = await post("/reopen", { dept: btn.dataset.d || ME.dept });
-      if (!r.ok) { setErr(r.error); return; }
+      if (!r.ok) { toast(r.error, true); return; }
       await refreshFromServer(0, "reopened");
     }));
     b.querySelector("#pLock")?.addEventListener("click", async () => {
       const r = await post("/lock");
-      if (!r.ok) { setErr(r.error); return; }
+      if (!r.ok) { toast(r.error, true); return; }
       await refreshFromServer(0, "budget locked");
     });
     b.querySelector("#pManage")?.addEventListener("click", () => setPage("team"));
@@ -1590,19 +1612,19 @@ if (SERVER) {
     }));
     pane.querySelector("#tLock")?.addEventListener("click", async () => {
       const r = await post("/lock");
-      if (!r.ok) { setErr(r.error); return; }
+      if (!r.ok) { toast(r.error, true); return; }
       await refreshFromServer(0, "budget locked");
       window.renderTeamPage();
     });
     pane.querySelector("#tUnlock")?.addEventListener("click", async () => {
       const r = await post("/reopen", { dept: "" });
-      if (!r.ok) { setErr(r.error); return; }
+      if (!r.ok) { toast(r.error, true); return; }
       await refreshFromServer(0, "unlocked");
       window.renderTeamPage();
     });
     pane.querySelectorAll(".tReopen").forEach(btn => btn.addEventListener("click", async () => {
       const r = await post("/reopen", { dept: btn.dataset.d });
-      if (!r.ok) { setErr(r.error); return; }
+      if (!r.ok) { toast(r.error, true); return; }
       await refreshFromServer(0, "reopened " + btn.dataset.d);
       window.renderTeamPage();
     }));
@@ -1788,7 +1810,7 @@ function renderInspect() {
   const gs = div.querySelector("#gsBtn");
   if (gs) gs.addEventListener("click", () => {
     const opts = leverOptions();
-    if (!opts.length) { setErr("no adjustable inputs to seek with"); return; }
+    if (!opts.length) { toast("no adjustable inputs to seek with", true); return; }
     const form = div.querySelector("#gsForm");
     form.innerHTML = `<div class="meta" style="margin-top:.4rem">target
       <input id="gsTarget" style="width:6em;font:inherit"> via
@@ -1986,26 +2008,103 @@ document.getElementById("addMemberBtn").addEventListener("click", () => {
     loadModel(`added ${dim}:${name}`);
   });
 });
-document.getElementById("simBtn").addEventListener("click", () => {
-  if (SERVER) { setErr("simulate runs in local mode"); return; }
-  const btn = document.getElementById("simBtn");
-  if (simBands) {                        // exit sim mode
-    simBands = null;
-    btn.classList.remove("on");
-    loadModel("back to deterministic");
+let SIM_RESULT = null;
+function renderSimulation() {
+  const pane = document.getElementById("simPane");
+  const info = window.__lastInfo;
+  const explain = `<div class="mcard"><h3>Monte Carlo simulation</h3>
+    <div class="mnote">Instead of one budget, the model is computed <b>hundreds of times</b>.
+    On every run, each <b>uncertain input</b> draws a fresh value from its declared
+    distribution (correlated inputs move together); everything downstream — margins,
+    EBITDA, covenants — recomputes. The spread of outcomes is reported as
+    <b>P10 / P50 / P90</b>: a 10% chance of landing below the P10, a 10% chance above
+    the P90. The P50 run is the budget you already see.</div></div>`;
+  if (SERVER) {
+    pane.innerHTML = explain + `<div class="mcard"><div class="mnote">Simulation runs in the
+      <b>modelling studio</b> (local mode) — it needs the in-browser engine. Ask your
+      finance modeller for a simulated view of this budget.</div></div>`;
     return;
   }
-  const t0 = performance.now();
-  if (exports.fml_simulate(500) !== 0) { setErr(readResult().error); return; }
-  const r = readResult();
-  simBands = {};
-  for (const c of r.cells) if (c.series) simBands[c.name] = c.bands;
-  btn.classList.add("on");
-  document.getElementById("stats").innerHTML =
-    `<b>simulated n=${r.trials}</b> · ${(performance.now() - t0).toFixed(0)} ms · cells show p50 with p10…p90`;
-  // re-render current grid with bands (reuse last full state)
-  writeInput("Base"); exports.fml_scenario(); render(readResult());
-});
+  const dists = info ? info.measures.filter(m => m.dist) : [];
+  const corr = info ? info.correlations : [];
+  const uncertain = dists.length
+    ? `<div class="mcard"><h3>Uncertain inputs in this model</h3>
+        ${dists.map(m => `<span class="chip amber">${escM(m.name)} <span style="opacity:.6">~ distribution</span></span>`).join("")}
+        ${corr.length ? `<div class="mnote" style="margin-top:.4rem"><b>correlated</b> — ${corr.map(([a, b, r]) => `${escM(a)} ⇄ ${escM(b)} (ρ=${r})`).join(" · ")}</div>` : ""}</div>`
+    : `<div class="mcard"><h3>Uncertain inputs in this model</h3>
+        <div class="mnote">None yet — every input is a single number, so a simulation would
+        return the same budget every time. Declare a view of the uncertainty on an input
+        with <code>~</code> in its file (Files page), for example:</div>
+        <div class="hx" style="margin-top:.4rem">input growth : rate ~ metalog { p10: 1%, p50: 4%, p90: 9% }
+input energy_use : mwh flow over q ~ normal(30_000, 1_500) per period</div>
+        <div class="mnote" style="margin-top:.4rem">metalog fits your own P10/P50/P90 view;
+        normal/uniform are classic; <code>per period</code> makes each quarter an independent
+        shock; <code>correlate a, b = 0.7</code> ties two inputs together.</div></div>`;
+  let results = "";
+  if (SIM_RESULT) {
+    const unitOf = n => {
+      const s = (lastState?.series || []).find(r => r.name === n);
+      if (s) return s.unit;
+      const sc = (lastState?.scalars || []).find(x => x.name === n);
+      return sc ? sc.unit : "";
+    };
+    const rows = SIM_RESULT.cells.map(c => {
+      const slot = c.series ? c.bands.length - 1 : 0;
+      const [p10, p50, p90] = c.bands[slot] || [null, null, null];
+      return { n: c.name, series: c.series, p10, p50, p90,
+        spread: p10 !== null && p90 !== null ? Math.abs(p90 - p10) : 0 };
+    }).filter(r => r.spread > 1e-9).sort((a, b) => b.spread - a.spread).slice(0, 15);
+    const lastPer = lastState?.periods?.[lastState.periods.length - 1] || "";
+    results = `<div class="mcard"><h3>Results — ${SIM_RESULT.trials} runs</h3>
+      <div class="mnote">series show the final period (${escM(lastPer)}); the Budget grid now
+      shows every period as P50 with its P10…P90 band</div>
+      <table class="mtable"><tr><th>measure</th><th style="text-align:right">P10</th>
+        <th style="text-align:right">P50</th><th style="text-align:right">P90</th><th>unit</th></tr>
+      ${rows.map(r => `<tr><td style="font-family:var(--mono)">${escM(r.n)}</td>
+        <td style="text-align:right;font-family:var(--mono)">${fmt(r.p10)}</td>
+        <td style="text-align:right;font-family:var(--mono);font-weight:700">${fmt(r.p50)}</td>
+        <td style="text-align:right;font-family:var(--mono)">${fmt(r.p90)}</td>
+        <td class="mnote">${escM(unitOf(r.n))}</td></tr>`).join("")}</table>
+      <div class="toolbar" style="border:0;padding:.5rem 0 0">
+        <button id="simToBudget">View bands in the Budget grid</button>
+        <button id="simExit">Exit simulation</button></div></div>`;
+  }
+  pane.innerHTML = explain + uncertain + `
+    <div class="mcard"><h3>Run</h3>
+      <div class="toolbar" style="border:0;padding:0">
+        <span class="tlbl">runs</span>
+        <select id="simN"><option>200</option><option selected>500</option><option>1000</option><option>2000</option><option>5000</option></select>
+        <button id="simRun" ${dists.length ? "" : "disabled title='declare an uncertain input first'"}>Run Monte Carlo</button>
+        <span id="simOut" class="mnote"></span></div></div>` + results;
+  pane.querySelector("#simRun")?.addEventListener("click", () => {
+    const n = Number(pane.querySelector("#simN").value);
+    pane.querySelector("#simOut").textContent = `running ${n} times…`;
+    setTimeout(() => {
+      const t0 = performance.now();
+      if (exports.fml_simulate(n) !== 0) {
+        toast(readResult().error, true);
+        renderSimulation();
+        return;
+      }
+      SIM_RESULT = readResult();
+      simBands = {};
+      for (const c of SIM_RESULT.cells) if (c.series) simBands[c.name] = c.bands;
+      writeInput("Base");
+      exports.fml_scenario();
+      render(readResult());
+      document.getElementById("stats").innerHTML =
+        `<b>simulated n=${SIM_RESULT.trials}</b> · ${(performance.now() - t0).toFixed(0)} ms · grid shows p50 with p10…p90`;
+      renderSimulation();
+    }, 30);
+  });
+  pane.querySelector("#simToBudget")?.addEventListener("click", () => setPage("budget"));
+  pane.querySelector("#simExit")?.addEventListener("click", () => {
+    SIM_RESULT = null;
+    simBands = null;
+    loadModel("back to deterministic");
+    renderSimulation();
+  });
+}
 window.addEventListener("keydown", e => {
   if ((e.metaKey || e.ctrlKey) && e.key === "s") {
     e.preventDefault();
