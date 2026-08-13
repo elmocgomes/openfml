@@ -909,6 +909,23 @@ pub extern "C" fn fml_tokens() -> i32 {
     0
 }
 
+/// The model's structural self-description (files/includes, measures with
+/// the reference graph, dims, asserts, scenarios) for management views.
+#[no_mangle]
+pub extern "C" fn fml_model_info() -> i32 {
+    let session = unsafe {
+        match SESSION.as_ref() {
+            Some(s) => s,
+            None => {
+                set_result("{\"ok\":false,\"error\":\"no model loaded\"}".into());
+                return 1;
+            }
+        }
+    };
+    set_result(session.model_info_json());
+    0
+}
+
 /// Completion candidates from the live session: JSON [[name, kind,
 /// detail], …] (measures with units, members, units, ranges, keywords).
 #[no_mangle]

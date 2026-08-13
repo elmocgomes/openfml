@@ -196,6 +196,56 @@
   #hint { color:var(--mut); font-size:.74rem; }
   #stats { margin-left:auto; color:var(--mut); font-size:.78rem; } #stats b { color:var(--ok); }
 
+  /* ---- the model view: includes, architecture, roll-up, access ---- */
+  body.view-model main { grid-template-columns: 1fr !important; }
+  body.view-model #left, body.view-model #split, body.view-model #right { display:none; }
+  #modelPane { display:none; overflow:auto; min-height:0; background:var(--bg); padding:1.1rem 1.3rem; }
+  body.view-model #modelPane { display:block; }
+  .mcard { background:var(--card); border:1px solid var(--line); border-radius:10px;
+    padding:.9rem 1.1rem; margin-bottom:1rem; box-shadow:0 1px 2px rgba(16,30,54,.04); }
+  .mcard h3 { margin:.1rem 0 .6rem; font-size:.74rem; color:var(--mut);
+    text-transform:uppercase; letter-spacing:.8px; }
+  .mgrid { display:grid; grid-template-columns:repeat(auto-fit, minmax(340px, 1fr)); gap:1rem; }
+  .mgrid .mcard { margin-bottom:0; }
+  .mover b { font-size:1rem; margin-right:.4rem; }
+  .chip { display:inline-block; background:#eef1f6; color:#4a5668; border-radius:999px;
+    padding:.08rem .55rem; font-size:.74rem; margin:.12rem .25rem .12rem 0; }
+  .chip.amber { background:var(--amber); color:var(--warn); }
+  .chip.roll { background:var(--pri2); color:var(--pri); font-weight:600; }
+  .chip.all { background:#f3e8fd; color:#7b3ff2; font-weight:600; }
+  .chip.okc { background:var(--okbg); color:var(--ok); } .chip.badc { background:var(--badbg); color:var(--bad); }
+  .mnote { color:var(--mut); font-size:.78rem; margin:.15rem 0 .4rem; }
+  .ftree ul { list-style:none; margin:.15rem 0 .15rem .55rem; padding-left:.9rem;
+    border-left:1px dashed var(--line); }
+  .ftree > ul { margin-left:0; padding-left:0; border-left:0; }
+  .ftree li { padding:.14rem 0; }
+  .ftree .fname { font-family:var(--mono); font-size:.8rem; color:var(--pri); }
+  .ftree .fname.link { cursor:pointer; } .ftree .fname.link:hover { text-decoration:underline; }
+  .dimrow { padding:.25rem 0; border-top:1px dashed var(--line); font-size:.85rem; }
+  .dimrow:first-of-type { border-top:0; }
+  .mtable { border-collapse:collapse; width:100%; }
+  .mtable th, .mtable td { text-align:left; padding:.32rem .5rem; border-bottom:1px solid var(--line);
+    font-family:var(--sans); font-size:.82rem; font-variant-numeric:normal; white-space:normal; position:static;
+    background:transparent; box-shadow:none; max-width:none; }
+  .mtable th { color:var(--mut); font-size:.7rem; text-transform:uppercase; letter-spacing:.5px; border-bottom:2px solid var(--line); }
+  .mtable tr.meRow td { background:var(--pri2); }
+  .dagwrap { overflow:auto; padding:.3rem 0; }
+  #dag .edge { fill:none; stroke:#c9d4e5; stroke-width:1.2; }
+  #dag .edge.hl { stroke:var(--pri); stroke-width:2; }
+  #dag .node { cursor:pointer; }
+  #dag .node rect { fill:#fff; stroke:var(--line); }
+  #dag .node.input rect { fill:var(--amber); stroke:var(--amber2); }
+  #dag .node.solve rect { fill:#f3e8fd; stroke:#e2cdfa; }
+  #dag .node.assert.pass rect { fill:var(--okbg); stroke:#bfe3cb; }
+  #dag .node.assert.fail rect { fill:var(--badbg); stroke:#f0c1bf; }
+  #dag .node.sel rect { stroke:var(--pri); stroke-width:2; }
+  #dag .node text { font:600 11px var(--sans); fill:var(--ink); }
+  #dag .node text.u { font:9px var(--sans); fill:var(--mut); }
+  #mdetail { margin-top:.5rem; }
+  #mdetail .box { border-top:2px solid var(--line); padding-top:.5rem; font-size:.84rem; }
+  #mdetail b.nm { font-family:var(--mono); font-size:.9rem; }
+  #mdetail a { color:var(--pri); text-decoration:none; }
+
   /* ---- inspector & tornado cards ---- */
   #inspect, #tornado { position:fixed; right:1rem; bottom:3rem; background:var(--card);
     border:1px solid var(--line); border-radius:12px; padding:.8rem 1rem;
@@ -247,7 +297,7 @@
     <span id="draftState"></span>
   </span>
   <span class="views" id="views" title="Layout">
-    <button data-v="code">code</button><button data-v="split" class="on">split</button><button data-v="grid">grid</button>
+    <button data-v="code">code</button><button data-v="split" class="on">split</button><button data-v="grid">grid</button><button data-v="model">model</button>
   </span>
   <span id="asserts" title="Model checks — every assert, every period"></span>
 </header>
@@ -268,6 +318,7 @@
   </div>
   <div id="split" title="Drag to resize"></div>
   <div id="right"><table id="tbl"></table></div>
+  <div id="modelPane"></div>
 </main>
 <div id="foot">
   <span><span class="lbl">scalars</span><span id="scalars"></span></span>
@@ -500,6 +551,7 @@ function render(r) {
     `<span${SERVER ? "" : ` class="scx" data-s="${s.name}" title="click: explain this number" style="cursor:pointer"`}>${s.name} = <b>${fmt(s.val)}</b><span class="unit">${s.unit}</span></span>`).join("");
   document.querySelectorAll("#scalars .scx").forEach(sp =>
     sp.addEventListener("click", () => inspect(sp.dataset.s, "", null, false)));
+  if (document.body.classList.contains("view-model")) renderModel();
   document.querySelectorAll("td.torn").forEach(td => {
     td.addEventListener("click", () => {
       inspect(td.dataset.tkey, td.dataset.tmember || "", Number(td.dataset.tt), false);
@@ -735,6 +787,256 @@ async function refreshFromServer(us, what) {
   const box = document.getElementById("src");
   if (m.src !== box.value) { const top = box.scrollTop; box.value = m.src; box.scrollTop = top; if (typeof renderHl === "function") renderHl(); }
 }
+// ---- the model view: include hierarchy, architecture DAG, roll-up, access ----
+const escM = t => String(t).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+// Single-file models carry the internal name "main"/"model" — show the real one.
+const fileDisp = f => !SERVER && (f === "main" || f === "model") ? mainFile() : f;
+let modelInfoReq = 0;
+async function fetchModelInfo() {
+  if (SERVER) {
+    if (!window.clientQs) return null; // client boot not finished yet
+    try { return await (await fetch(SERVER + "/info" + window.clientQs())).json(); }
+    catch { return null; }
+  }
+  if (!exports || !loadedOk) return null;
+  if (exports.fml_model_info() !== 0) return null;
+  return readResult();
+}
+function dagSvg(info) {
+  const M = info.measures, byName = {};
+  M.forEach(m => byName[m.name] = m);
+  // Layer = longest path from the inputs; solve cycles settle on the
+  // layer where the cycle is entered (the guard breaks recursion).
+  const depth = {}, onstack = new Set();
+  const d = n => {
+    if (depth[n] !== undefined) return depth[n];
+    if (onstack.has(n)) return 0;
+    const m = byName[n];
+    if (!m) return 0;
+    onstack.add(n);
+    const v = m.input ? 0 : 1 + m.refs.reduce((a, r) => Math.max(a, d(r)), 0);
+    onstack.delete(n);
+    depth[n] = v;
+    return v;
+  };
+  M.forEach(m => d(m.name));
+  let maxD = Math.max(0, ...M.map(m => depth[m.name]));
+  const nodes = M.map(m => ({ id: m.name, m, d: depth[m.name],
+    kind: m.input ? "input" : m.solve ? "solve" : "calc", refs: m.refs }));
+  if (info.asserts.length) {
+    maxD += 1;
+    for (const a of info.asserts) nodes.push({ id: a.name, d: maxD, kind: "assert", refs: a.refs });
+  }
+  const passMap = {};
+  (lastState?.asserts || []).forEach(([n, ok]) => passMap[n] = ok);
+  const cols = Array.from({ length: maxD + 1 }, () => []);
+  nodes.forEach(n => cols[n.d].push(n));
+  const rowH = 32, gapY = 10, colGap = 64, padX = 12;
+  let x = 8;
+  const pos = {};
+  cols.forEach(col => {
+    const w = Math.max(96, ...col.map(n => n.id.length * 6.7 + 2 * padX));
+    col.forEach((n, j) => { pos[n.id] = { x, y: 10 + j * (rowH + gapY), w }; });
+    x += w + colGap;
+  });
+  const H = Math.max(1, ...cols.map(c => c.length)) * (rowH + gapY) + 18;
+  const W = x - colGap + 16;
+  let edges = "", nds = "";
+  for (const n of nodes) {
+    for (const r of n.refs) {
+      const p = pos[r], q = pos[n.id];
+      if (!p || !q) continue;
+      const x1 = p.x + p.w, y1 = p.y + rowH / 2, x2 = q.x, y2 = q.y + rowH / 2;
+      edges += `<path class="edge" data-from="${escM(r)}" data-to="${escM(n.id)}"
+        d="M${x1},${y1} C${x1 + colGap / 2},${y1} ${x2 - colGap / 2},${y2} ${x2},${y2}"/>`;
+    }
+  }
+  for (const n of nodes) {
+    const p = pos[n.id];
+    const cls = n.kind + (n.kind === "assert" ? (passMap[n.id] === false ? " fail" : " pass") : "");
+    const sub = n.kind === "assert" ? "assert"
+      : [n.m.unit, n.m.solve ? "solve" : "", n.m.dist ? "~dist" : ""].filter(Boolean).join(" · ");
+    nds += `<g class="node ${cls}" data-n="${escM(n.id)}" transform="translate(${p.x},${p.y})">
+      <rect width="${p.w}" height="${rowH}" rx="7"/>
+      <text x="${padX}" y="13">${escM(n.id)}</text>
+      <text class="u" x="${padX}" y="25">${escM(sub)}</text></g>`;
+  }
+  return `<svg id="dag" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${edges}${nds}</svg>`;
+}
+function showNodeDetail(info, name) {
+  const el = document.getElementById("mdetail");
+  if (!el) return;
+  document.querySelectorAll("#dag .node").forEach(g => g.classList.toggle("sel", g.dataset.n === name));
+  const m = info.measures.find(x => x.name === name);
+  const a = !m && info.asserts.find(x => x.name === name);
+  if (!m && !a) return;
+  const link = n => `<a href="#" class="mgoto" data-n="${escM(n)}">${escM(n)}</a>`;
+  const links = xs => xs.length ? xs.map(link).join(", ") : "—";
+  const o = m || a;
+  const tags = m
+    ? [m.input ? "input" : "computed", m.series ? "series" : "scalar",
+       m.solve ? "solve member" : "", m.dist ? "stochastic" : "",
+       m.round !== null && m.round !== undefined ? `round ${m.round}` : "",
+       m.editable ? "literal-editable" : ""].filter(Boolean)
+    : ["assert"];
+  el.innerHTML = `<div class="box"><b class="nm">${escM(name)}</b>
+    ${m ? `<span class="chip">${escM(m.unit)}</span>` : ""}
+    ${m && m.dims.length ? `<span class="chip">over ${m.dims.map(escM).join(", ")}</span>` : ""}
+    ${tags.map(t => `<span class="chip">${escM(t)}</span>`).join("")}
+    <div class="mnote">defined in <a href="#" class="mdef" data-file="${escM(o.file)}" data-line="${o.line}">${escM(fileDisp(o.file))}:${o.line}</a></div>
+    <div class="mnote"><b>built from</b> — ${links(m ? m.refs : a.refs)}</div>
+    ${m ? `<div class="mnote"><b>feeds into</b> — ${links(m.dependents)}</div>` : ""}</div>`;
+  el.querySelectorAll(".mgoto").forEach(x => x.addEventListener("click", e => {
+    e.preventDefault();
+    showNodeDetail(info, x.dataset.n);
+  }));
+  el.querySelector(".mdef").addEventListener("click", e => {
+    e.preventDefault();
+    if (SERVER) return; // client sees the expanded source, no per-file tabs
+    setView("code");
+    gotoDef(el.querySelector(".mdef").dataset.file, Number(el.querySelector(".mdef").dataset.line));
+  });
+}
+async function renderModel() {
+  const pane = document.getElementById("modelPane");
+  const req = ++modelInfoReq;
+  const info = await fetchModelInfo();
+  if (req !== modelInfoReq) return;
+  if (!info || !info.ok) {
+    pane.innerHTML = `<div class="mcard mnote">model information is not available yet${info && info.error ? " — " + escM(info.error) : ""}</div>`;
+    return;
+  }
+  let grantsAll = null;
+  if (SERVER) {
+    try {
+      const g = await (await fetch(SERVER + "/grants" + window.clientQs())).json();
+      if (g.ok) grantsAll = g.users;
+    } catch { /* access card falls back */ }
+  }
+  const me = window.clientMe ? window.clientMe() : null;
+  const per = lastState?.periods || [];
+  const inputs = info.measures.filter(m => m.input);
+  const overview = `<div class="mcard mover"><b>${escM(info.model)}</b>
+    <span class="chip">${info.files.length} file${info.files.length === 1 ? "" : "s"}</span>
+    <span class="chip">${info.measures.length} measures · ${inputs.length} inputs</span>
+    ${per.length ? `<span class="chip">${escM(per[0])} → ${escM(per[per.length - 1])} · ${per.length} periods</span>` : ""}
+    <span class="chip">${info.dims.length} dimension${info.dims.length === 1 ? "" : "s"}</span>
+    <span class="chip">${info.asserts.length} asserts</span>
+    <span class="chip">${info.scenarios.length} scenarios</span></div>`;
+  // Files & includes: the hierarchy as declared, decl mix per file.
+  const byFile = {};
+  info.files.forEach(f => byFile[f.name] = f);
+  const declMix = f => {
+    const c = {};
+    f.decls.forEach(d => c[d.kind] = (c[d.kind] || 0) + 1);
+    return Object.entries(c).map(([k, n]) => `<span class="chip">${n} ${k}${n > 1 ? "s" : ""}</span>`).join("");
+  };
+  const seen = new Set();
+  const fileLi = name => {
+    const f = byFile[name];
+    if (!f || seen.has(name)) return `<li><span class="fname">${escM(fileDisp(name))}</span></li>`;
+    seen.add(name);
+    const kids = f.includes.map(fileLi).join("");
+    const clickable = !SERVER && fileTexts[fileDisp(name)] !== undefined;
+    return `<li><span class="fname${clickable ? " link" : ""}" data-f="${escM(name)}">${escM(fileDisp(name))}</span>
+      <span class="chip">${f.lines} lines</span>${declMix(f)}${kids ? `<ul>${kids}</ul>` : ""}</li>`;
+  };
+  const roots = fileLi(info.files.length ? info.files[0].name : "");
+  const orphans = info.files.filter(f => !seen.has(f.name)).map(f => fileLi(f.name)).join("");
+  const filesCard = `<div class="mcard"><h3>Files & includes</h3>
+    <div class="mnote">the master file includes each department's fragment; a fragment's numbers live in ITS file — grid edits write back to the owner</div>
+    <div class="ftree"><ul>${roots}${orphans}</ul></div></div>`;
+  const dimsCard = info.dims.length ? `<div class="mcard"><h3>Dimensions & roll-up</h3>
+    ${info.dims.map(d => `<div class="dimrow"><b>${escM(d.name)}</b> &nbsp;
+      ${d.group ? `<span class="chip roll">${escM(d.group)} = Σ</span> ⟵ ` : ""}
+      ${d.members.map(m => `<span class="chip">${escM(m)}</span>`).join("")}</div>`).join("")}
+    ${info.correlations.length ? `<div class="mnote" style="margin-top:.5rem"><b>correlations</b> —
+      ${info.correlations.map(([a, b, r]) => `${escM(a)} ⇄ ${escM(b)} (ρ=${r})`).join(" · ")}</div>` : ""}</div>` : "";
+  let accessCard;
+  if (grantsAll) {
+    const rows = grantsAll.map(u => {
+      const writes = u.role === "viewer" ? '<span class="chip">read-only</span>'
+        : u.grants.some(g => g.measure === "*") ? '<span class="chip all">every measure</span>'
+        : u.grants.map(g => `<span class="chip amber">${escM(g.measure)}${g.member ? "[" + escM(g.member) + "]" : ""}</span>`).join("") || '<span class="chip">—</span>';
+      return `<tr${me && u.user === me.user ? ' class="meRow"' : ""}>
+        <td>${escM(u.user)}</td><td>${escM(u.dept || "")} · ${escM(u.role || "")}</td><td>${writes}</td></tr>`;
+    }).join("");
+    accessCard = `<div class="mcard"><h3>Access & write privileges</h3>
+      <table class="mtable"><tr><th>user</th><th>dept · role</th><th>may write</th></tr>${rows}</table>
+      <div class="mnote" style="margin-top:.4rem">read access is department-scoped per model (access.cfg); write grants reach only literal input cells — formulas are admin-only, structurally</div></div>`;
+  } else {
+    const editable = info.measures.filter(m => m.input && m.editable)
+      .map(m => `<span class="chip amber">${escM(m.name)}</span>`).join("");
+    accessCard = `<div class="mcard"><h3>Access & write privileges</h3>
+      <div class="mnote">local sandbox — no access control here; connect with <code>?server=…&token=…</code> for departments, roles and per-measure grants</div>
+      <div class="mnote" style="margin-top:.4rem"><b>literal-editable inputs</b> (grid write-back reaches these)</div>${editable || "—"}</div>`;
+  }
+  const passMap = {};
+  (lastState?.asserts || []).forEach(([n, ok]) => passMap[n] = ok);
+  const assertsCard = info.asserts.length ? `<div class="mcard"><h3>Asserts & covenants</h3>
+    ${info.asserts.map(a => `<div class="dimrow">
+      <span class="chip ${passMap[a.name] === false ? "badc" : "okc"}">${passMap[a.name] === false ? "✗" : "✓"} ${escM(a.name)}</span>
+      constrains ${a.refs.map(escM).join(", ") || "—"}
+      <span class="chip">${escM(fileDisp(a.file))}:${a.line}</span></div>`).join("")}</div>` : "";
+  const scenCard = info.scenarios.length ? `<div class="mcard"><h3>Scenarios</h3>
+    ${info.scenarios.map(s => `<div class="dimrow"><b>${escM(s.name)}</b>
+      <span class="chip">from ${escM(s.from)}</span>
+      <span class="chip">${s.overrides} override${s.overrides === 1 ? "" : "s"}</span></div>`).join("")}</div>` : "";
+  pane.innerHTML = overview
+    + `<div class="mcard"><h3>Architecture — how calculations roll up</h3>
+       <div class="mnote">inputs → intermediates → outputs → asserts, layered by dependency depth; hover a node to trace its edges, click it for detail</div>
+       <div class="dagwrap">${dagSvg(info)}</div><div id="mdetail"></div></div>`
+    + `<div class="mgrid">${filesCard}${accessCard}${dimsCard}${assertsCard}${scenCard}</div>`;
+  const svg = pane.querySelector("#dag");
+  svg.querySelectorAll(".node").forEach(g => {
+    g.addEventListener("mouseenter", () => svg.querySelectorAll(".edge").forEach(e =>
+      e.classList.toggle("hl", e.dataset.from === g.dataset.n || e.dataset.to === g.dataset.n)));
+    g.addEventListener("mouseleave", () => svg.querySelectorAll(".edge.hl").forEach(e => e.classList.remove("hl")));
+    g.addEventListener("click", () => showNodeDetail(info, g.dataset.n));
+    g.addEventListener("dblclick", () => {
+      const m = info.measures.find(x => x.name === g.dataset.n) || info.asserts.find(x => x.name === g.dataset.n);
+      if (m && !SERVER) { setView("code"); gotoDef(m.file, m.line); }
+    });
+  });
+  pane.querySelectorAll(".ftree .fname.link").forEach(el => el.addEventListener("click", () => {
+    const n = fileDisp(el.dataset.f);
+    if (fileTexts[n] === undefined) return;
+    activeFile = n;
+    srcBox.value = fileTexts[n];
+    renderTabs();
+    updateDraftState();
+    renderHl();
+    setView("code");
+  }));
+}
+
+// ---- layout: code / split / grid / model views + draggable divider ----
+// (wired before the client-mode fork so connected users get the views too)
+function setView(v) {
+  document.body.classList.remove("view-code", "view-grid", "view-model");
+  if (v !== "split") document.body.classList.add("view-" + v);
+  document.querySelectorAll("#views button").forEach(b => b.classList.toggle("on", b.dataset.v === v));
+  localStorage.setItem("fml:view", v);
+  if (v === "model") renderModel();
+}
+document.querySelectorAll("#views button").forEach(b =>
+  b.addEventListener("click", () => setView(b.dataset.v)));
+setView(localStorage.getItem("fml:view") || "split");
+const mainEl = document.querySelector("main");
+const savedSplit = localStorage.getItem("fml:splitpx");
+if (savedSplit) mainEl.style.gridTemplateColumns = `${savedSplit}px 6px 1fr`;
+document.getElementById("split").addEventListener("mousedown", e => {
+  e.preventDefault();
+  const move = ev => {
+    const px = Math.max(240, Math.min(ev.clientX, window.innerWidth - 320));
+    mainEl.style.gridTemplateColumns = `${px}px 6px 1fr`;
+    localStorage.setItem("fml:splitpx", px);
+  };
+  const up = () => { window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up); };
+  window.addEventListener("mousemove", move);
+  window.addEventListener("mouseup", up);
+});
+
 if (SERVER && !TOKEN) {
   // ---- landing: ask for the access token ----
   const div = document.createElement("div");
@@ -756,9 +1058,9 @@ if (SERVER) {
   // ---- connected client: the budget process, server-evaluated ----
   document.title = `fml · ${USER}`;
   document.querySelector("header .actions").style.display = "none";
-  document.getElementById("views").style.display = "none";
   document.getElementById("src").readOnly = true;
   let ME = { user: USER, dept: "?", role: "viewer" };
+  window.clientMe = () => ME;
   let clientModel = PARAMS.get("model") || null;
   let proc = { locked: false, submitted: [] };
   const qs = () => `?token=${encodeURIComponent(TOKEN)}&model=${encodeURIComponent(clientModel)}`;
@@ -1257,31 +1559,6 @@ window.addEventListener("keydown", e => {
     hideComp();
   }
 });
-// ---- layout: code / split / grid views + draggable divider ----
-function setView(v) {
-  document.body.classList.remove("view-code", "view-grid");
-  if (v !== "split") document.body.classList.add("view-" + v);
-  document.querySelectorAll("#views button").forEach(b => b.classList.toggle("on", b.dataset.v === v));
-  localStorage.setItem("fml:view", v);
-}
-document.querySelectorAll("#views button").forEach(b =>
-  b.addEventListener("click", () => setView(b.dataset.v)));
-setView(localStorage.getItem("fml:view") || "split");
-const mainEl = document.querySelector("main");
-const savedSplit = localStorage.getItem("fml:splitpx");
-if (savedSplit) mainEl.style.gridTemplateColumns = `${savedSplit}px 6px 1fr`;
-document.getElementById("split").addEventListener("mousedown", e => {
-  e.preventDefault();
-  const move = ev => {
-    const px = Math.max(240, Math.min(ev.clientX, window.innerWidth - 320));
-    mainEl.style.gridTemplateColumns = `${px}px 6px 1fr`;
-    localStorage.setItem("fml:splitpx", px);
-  };
-  const up = () => { window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up); };
-  window.addEventListener("mousemove", move);
-  window.addEventListener("mouseup", up);
-});
-
 await switchModel("finplan");
 </script>
 </body>

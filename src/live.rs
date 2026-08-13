@@ -1933,6 +1933,198 @@ impl Session {
         Some(self.locate_line(self.checked.measures[m].line))
     }
 
+    /// The model's own description of itself, as JSON — the substrate for
+    /// management views: the include hierarchy, every measure with its
+    /// unit/dims/kind and the reference graph (refs + dependents), the
+    /// dimensions with their roll-up groups, asserts, scenarios, and
+    /// correlations. Everything comes from the checked model and the
+    /// per-file trees; nothing is re-derived client-side.
+    pub fn model_info_json(&self) -> String {
+        use crate::json::J;
+        let ck = &self.checked;
+        let measure_names: std::collections::HashSet<&str> =
+            ck.index.keys().map(|s| s.as_str()).collect();
+        let refs_of = |body: &crate::ast::Body, init: &Option<crate::ast::Expr>, me: &str| {
+            let mut names = Vec::new();
+            crate::ast::body_references(body, &mut names);
+            if let Some(e) = init {
+                crate::ast::all_names(e, &mut names);
+            }
+            names.sort();
+            names.dedup();
+            names.retain(|n| n != me && measure_names.contains(n.as_str()));
+            names
+        };
+        // Measures: identity, typing, provenance, and the forward graph.
+        let mut refs_per: Vec<Vec<String>> = Vec::with_capacity(ck.measures.len());
+        for mi in &ck.measures {
+            refs_per.push(refs_of(&mi.body, &mi.init, &mi.name));
+        }
+        let mut dependents: Vec<Vec<String>> = vec![Vec::new(); ck.measures.len()];
+        for (m, refs) in refs_per.iter().enumerate() {
+            for r in refs {
+                if let Some(&d) = ck.index.get(r) {
+                    dependents[d].push(ck.measures[m].name.clone());
+                }
+            }
+        }
+        let has_site: std::collections::HashSet<usize> =
+            ck.edit_sites.iter().map(|(m, _, _, _, _)| *m).collect();
+        let measures = J::A(
+            ck.measures
+                .iter()
+                .enumerate()
+                .map(|(m, mi)| {
+                    let (file, line) = self.locate_line(mi.line);
+                    let unit = match &mi.munit {
+                        crate::check::MUnit::Uniform(u) => format!("{u}"),
+                        crate::check::MUnit::Local => "local".into(),
+                    };
+                    J::O(vec![
+                        ("name".into(), J::S(mi.name.clone())),
+                        ("input".into(), J::B(mi.is_input)),
+                        ("series".into(), J::B(mi.is_series)),
+                        ("unit".into(), J::S(unit)),
+                        (
+                            "dims".into(),
+                            J::A(mi.dims.iter().map(|&d| J::S(ck.dims[d].name.clone())).collect()),
+                        ),
+                        ("file".into(), J::S(file)),
+                        ("line".into(), J::N(line as f64)),
+                        ("solve".into(), J::B(mi.solve.is_some())),
+                        ("dist".into(), J::B(mi.dist.is_some())),
+                        (
+                            "round".into(),
+                            mi.round.map_or(J::Null, |(dp, _)| J::N(dp as f64)),
+                        ),
+                        ("editable".into(), J::B(has_site.contains(&m))),
+                        (
+                            "refs".into(),
+                            J::A(refs_per[m].iter().map(|r| J::S(r.clone())).collect()),
+                        ),
+                        (
+                            "dependents".into(),
+                            J::A(dependents[m].iter().map(|d| J::S(d.clone())).collect()),
+                        ),
+                    ])
+                })
+                .collect(),
+        );
+        // Files: include directives (from the lossless lexer) + declarations.
+        let mut decls_by_file: std::collections::HashMap<String, Vec<J>> =
+            std::collections::HashMap::new();
+        for (name, kind, file, line) in self.symbols() {
+            decls_by_file.entry(file).or_default().push(J::O(vec![
+                ("name".into(), J::S(name)),
+                ("kind".into(), J::S(kind.into())),
+                ("line".into(), J::N(line as f64)),
+            ]));
+        }
+        let files = J::A(
+            self.files
+                .iter()
+                .map(|f| {
+                    let mut includes = Vec::new();
+                    if let Ok(toks) = crate::lexer::lex_full(&f.text) {
+                        for t in &toks {
+                            if t.tok == crate::lexer::Tok::Directive {
+                                let raw = &f.text[t.start..t.end];
+                                if let (Some(a), Some(b)) = (raw.find('"'), raw.rfind('"')) {
+                                    if b > a {
+                                        includes.push(J::S(raw[a + 1..b].to_string()));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    J::O(vec![
+                        ("name".into(), J::S(f.name.clone())),
+                        ("lines".into(), J::N(f.text.lines().count() as f64)),
+                        ("includes".into(), J::A(includes)),
+                        (
+                            "decls".into(),
+                            J::A(decls_by_file.remove(&f.name).unwrap_or_default()),
+                        ),
+                    ])
+                })
+                .collect(),
+        );
+        let dims = J::A(
+            ck.dims
+                .iter()
+                .map(|d| {
+                    J::O(vec![
+                        ("name".into(), J::S(d.name.clone())),
+                        ("group".into(), d.group.clone().map_or(J::Null, J::S)),
+                        (
+                            "members".into(),
+                            J::A(d.members.iter().map(|m| J::S(m.clone())).collect()),
+                        ),
+                    ])
+                })
+                .collect(),
+        );
+        let asserts = J::A(
+            ck.asserts
+                .iter()
+                .map(|a| {
+                    let (file, line) = self.locate_line(a.line);
+                    let mut names = Vec::new();
+                    crate::ast::all_names(&a.lhs, &mut names);
+                    crate::ast::all_names(&a.rhs, &mut names);
+                    names.sort();
+                    names.dedup();
+                    names.retain(|n| measure_names.contains(n.as_str()));
+                    J::O(vec![
+                        ("name".into(), J::S(a.name.clone())),
+                        ("file".into(), J::S(file)),
+                        ("line".into(), J::N(line as f64)),
+                        ("refs".into(), J::A(names.into_iter().map(J::S).collect())),
+                    ])
+                })
+                .collect(),
+        );
+        let scenarios = J::A(
+            ck.scenarios
+                .iter()
+                .map(|s| {
+                    J::O(vec![
+                        ("name".into(), J::S(s.name.clone())),
+                        (
+                            "from".into(),
+                            s.parent
+                                .map_or(J::S("Base".into()), |p| J::S(ck.scenarios[p].name.clone())),
+                        ),
+                        ("overrides".into(), J::N(s.overrides.len() as f64)),
+                    ])
+                })
+                .collect(),
+        );
+        let correlations = J::A(
+            ck.correlations
+                .iter()
+                .map(|&(a, b, rho)| {
+                    J::A(vec![
+                        J::S(ck.measures[a].name.clone()),
+                        J::S(ck.measures[b].name.clone()),
+                        J::N(rho),
+                    ])
+                })
+                .collect(),
+        );
+        J::O(vec![
+            ("ok".into(), J::B(true)),
+            ("model".into(), J::S(ck.model_name.clone())),
+            ("files".into(), files),
+            ("dims".into(), dims),
+            ("measures".into(), measures),
+            ("asserts".into(), asserts),
+            ("scenarios".into(), scenarios),
+            ("correlations".into(), correlations),
+        ])
+        .dump()
+    }
+
     /// The document's declarations for outline views:
     /// (name, kind tag, owning file, 1-based local line).
     pub fn symbols(&self) -> Vec<(String, &'static str, String, usize)> {

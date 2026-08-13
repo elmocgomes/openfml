@@ -387,6 +387,12 @@ fn main() {
                 let json = fml::wasm::dump_state(&mut st.session, &stats, false);
                 respond(&mut stream, 200, &json);
             }
+            ("GET", "/info") => {
+                // The model's structural self-description (files/includes,
+                // measure graph, dims, asserts) — any reader may see it;
+                // reading the source is already granted via /model.
+                respond(&mut stream, 200, &st.session.model_info_json());
+            }
             ("GET", "/seq") => {
                 respond(
                     &mut stream,
@@ -404,7 +410,12 @@ fn main() {
                     if k > 0 {
                         out.push(',');
                     }
-                    out.push_str(&format!("{{\"user\":\"{}\",\"grants\":[", json_escape(&u.name)));
+                    out.push_str(&format!(
+                        "{{\"user\":\"{}\",\"dept\":\"{}\",\"role\":\"{}\",\"grants\":[",
+                        json_escape(&u.name),
+                        json_escape(&u.dept),
+                        role_str(u.role)
+                    ));
                     for (j, g) in ma.effective_grants(u).iter().enumerate() {
                         if j > 0 {
                             out.push(',');

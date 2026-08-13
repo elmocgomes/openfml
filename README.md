@@ -603,6 +603,29 @@ The scheduler generalizes to the (measure × member × period) micro-graph.
   no-op guard in the change handler, after a browser form-state restore
   during reload resurrected a stale cell value and committed a phantom
   patch into the signed audit log.
+- **The model view (slice 17)** — model management inside the workbench.
+  `Session::model_info_json` is the model's structural self-description:
+  the include hierarchy (directives read from the lossless lexer, decls
+  grouped by owning file), every measure with unit/dims/kind flags
+  (input, solve, stochastic, rounded, literal-editable) and the exact
+  reference graph — refs from the checked bodies, dependents as its
+  transpose — plus dims with roll-up groups, asserts with the measures
+  they constrain, scenario chains, and correlations. Exposed as
+  `fml_model_info` (wasm) and `GET /info` (server; `/grants` grew
+  dept/role per user). Locked in CI by `tests/info.rs`: graph symmetry,
+  include ownership (a fragment's measure locates in ITS file), flags.
+  The workbench gains a fourth view — **model** — in both local and
+  client mode (the view toggle now survives into connected sessions):
+  an overview strip; an **architecture DAG** (measures layered by
+  dependency depth, inputs amber → intermediates → outputs → assert
+  nodes lit green/red by live results; hover traces edges, click opens
+  a detail panel with built-from/feeds-into links, double-click jumps
+  to the definition); a **files & includes tree** (decl mix per file,
+  click opens the owning tab in the code view); **dimensions &
+  roll-up** (group = Σ ← members, correlations); and **access & write
+  privileges** — connected: the full user × grants matrix with the
+  caller's row highlighted; local: the literal-editable input set and
+  a pointer to server mode.
 - Still ahead — per-declaration unit-inference/scheduling queries,
   integer minor-unit representation, read-side information-flow
   control, TLS / reverse-proxy deployment.
