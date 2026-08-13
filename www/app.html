@@ -103,7 +103,14 @@
   button.act.ghost { background: var(--pri2); color: var(--pri); }
   button.act.danger { background: var(--badbg); color: var(--bad); }
   button.act:disabled { opacity: .45; cursor: default; }
-  .toolbar { display: flex; gap: .6rem; margin: .9rem 0; flex-wrap: wrap; align-items: center; }
+  .toolbar { display: flex; gap: .6rem; margin: .9rem 0; flex-wrap: wrap; align-items: center; position: relative; }
+  #fmtPop { position: absolute; top: calc(100% + 4px); right: 0; z-index: 35; background: var(--card);
+    border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 12px 40px rgba(16,30,54,.28);
+    padding: .7rem .9rem; min-width: 250px; }
+  #fmtPop label { display: flex; align-items: center; gap: .5rem; font-size: .82rem;
+    margin: .3rem 0; justify-content: space-between; }
+  #fmtPop select { border: 1px solid var(--line); border-radius: 5px; padding: .15rem .3rem; font-size: .8rem; }
+  #fmtPop .fnote { color: var(--mut); font-size: .72rem; margin-top: .4rem; }
 
   /* ---- tables (audit, people) ---- */
   table.list { border-collapse: collapse; width: 100%; background: var(--card); }
@@ -345,13 +352,15 @@ function pageEntry() {
     lastKey = grouped ? r.key : null;
     const label = grouped ? r.member : r.name;
     rows += `<tr><td class="${grouped ? "mname" : ""}" data-mh="${esc(r.key)}">${esc(label)}${grouped ? "" : `<span class="unit">${esc(r.unit)}</span>`}</td>`;
+    const rowMax = Math.max(0, ...r.vals.filter(x => x !== null).map(Math.abs));
     r.vals.forEach((v, t) => {
       const inRange = t >= r.range[0] && t <= r.range[1];
       const sited = r.edit === "all" ? inRange : Array.isArray(r.edit) && r.edit.includes(t);
       const editable = r.input && sited && editableRound && authorized(r.key, r.member || null);
       const cls = editable ? "in" : "ro";
       rows += `<td class="num ${cls}${v !== null && v < 0 ? " neg" : ""}${inRange ? "" : " ro"}"
-        ${editable ? `data-key="${esc(r.key)}" data-member="${esc(r.member || "")}" data-t="${t}"` : ""}>${inRange ? fmt(v) : "·"}</td>`;
+        data-raw="${v === null ? "" : v}"
+        ${editable ? `data-key="${esc(r.key)}" data-member="${esc(r.member || "")}" data-t="${t}"` : ""}>${inRange ? fmtCell(v, r.unit, rowMax) : "·"}</td>`;
     });
     rows += "</tr>";
   }
@@ -362,6 +371,8 @@ function pageEntry() {
       <span class="legend">editable<span class="sw" style="background:var(--amber)"></span>
         computed<span class="sw" style="background:#fff"></span></span>
       <span class="legend" id="entryHelp" style="cursor:help;border:1px solid var(--line);border-radius:999px;padding:.15rem .6rem">⌨ entry codes</span>
+      <span class="legend" id="fmtBtn" style="cursor:pointer;border:1px solid var(--line);border-radius:999px;padding:.15rem .6rem">Aa format${FMT.scale > 1 ? ` · ×${FMT.scale === 1e6 ? "1m" : "1k"}` : ""}</span>
+      <div id="fmtPop" style="display:none"></div>
     </div>
     <div class="gridwrap"><table class="grid">
       <thead><tr><th>Measure</th>${s.periods.map(p => `<th>${esc(p)}</th>`).join("")}</tr></thead>
@@ -374,8 +385,8 @@ function pageEntry() {
   const cellSel = (k, mb, t) =>
     `td.in[data-key="${CSS.escape(k)}"][data-member="${CSS.escape(mb || "")}"]` + (t !== undefined ? `[data-t="${t}"]` : "");
   const cellCur = td => {
-    const raw = td.textContent.replace(/[(),]/g, m => m === "(" ? "-" : "");
-    return raw === "·" || raw.trim() === "" ? 0 : Number(raw);
+    const raw = td.dataset.raw;
+    return raw === undefined || raw === "" ? 0 : Number(raw);
   };
   const neighbor = (td, dir) => {
     if (!dir) return null;
@@ -460,6 +471,14 @@ function pageEntry() {
   }
   $("entryHelp")?.addEventListener("mouseover", e => showTipAt(e.clientX, e.clientY, ENTRY_LEGEND));
   $("entryHelp")?.addEventListener("mouseleave", hideTip);
+  $("fmtBtn")?.addEventListener("click", e => {
+    e.stopPropagation();
+    const pop = $("fmtPop");
+    if (pop.style.display !== "none") { pop.style.display = "none"; return; }
+    pop.innerHTML = fmtPopHtml();
+    pop.style.display = "";
+    wireFmtPop(pop);
+  });
 }
 
 function parseEntry(raw, cur) {
@@ -512,6 +531,68 @@ function parseEntry(raw, cur) {
   const v = num(raw);
   return v === null ? null : { op: "set", v };
 }
+// ---- display formatting: finance-grade, user-editable ------------------
+let FMT = Object.assign({ dec: "auto", neg: "paren", scale: 1, pct: true, dash0: false },
+  JSON.parse(localStorage.getItem("fml:fmt") || "{}"));
+function saveFmt() {
+  localStorage.setItem("fml:fmt", JSON.stringify(FMT));
+  renderPage();
+}
+function isScaledUnit(unit) {
+  return FMT.scale > 1 && unit !== "1" && unit !== "" && !unit.includes("/");
+}
+function fmtCell(v, unit, rowMax) {
+  if (v === null || v === undefined) return "·";
+  const dimless = unit === "1" || unit === "";
+  if (FMT.pct && dimless && Math.abs(rowMax) < 10) {
+    const pc = v * 100;
+    return (pc < 0 ? "(" : "") + Math.abs(pc).toLocaleString("en-US",
+      { minimumFractionDigits: 0, maximumFractionDigits: 1 }) + "%" + (pc < 0 ? ")" : "");
+  }
+  if (FMT.dash0 && v === 0) return "–";
+  const scaled = isScaledUnit(unit);
+  const x = scaled ? v / FMT.scale : v;
+  const rm = Math.abs(scaled ? rowMax / FMT.scale : rowMax);
+  const d = FMT.dec === "auto" ? (rm >= 1000 ? 0 : rm >= 20 ? 1 : 2) : Number(FMT.dec);
+  const s = Math.abs(x).toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
+  if (x < 0) return FMT.neg === "paren" ? `(${s})` : `-${s}`;
+  return s;
+}
+function fmtPopHtml() {
+  return `
+    <label>decimals <select id="fDec">
+      <option value="auto"${FMT.dec === "auto" ? " selected" : ""}>auto (per row)</option>
+      <option value="0"${FMT.dec === "0" ? " selected" : ""}>0</option>
+      <option value="1"${FMT.dec === "1" ? " selected" : ""}>1</option>
+      <option value="2"${FMT.dec === "2" ? " selected" : ""}>2</option></select></label>
+    <label>negatives <select id="fNeg">
+      <option value="paren"${FMT.neg === "paren" ? " selected" : ""}>(1,234)</option>
+      <option value="minus"${FMT.neg === "minus" ? " selected" : ""}>-1,234</option></select></label>
+    <label>show amounts <select id="fScale">
+      <option value="1"${FMT.scale === 1 ? " selected" : ""}>at full value</option>
+      <option value="1000"${FMT.scale === 1000 ? " selected" : ""}>in thousands (×1k)</option>
+      <option value="1000000"${FMT.scale === 1e6 ? " selected" : ""}>in millions (×1m)</option></select></label>
+    <label>rates as percent <input type="checkbox" id="fPct"${FMT.pct ? " checked" : ""}></label>
+    <label>zeros as – <input type="checkbox" id="fDash"${FMT.dash0 ? " checked" : ""}></label>
+    <div class="fnote">display only — you always type full values; entry codes
+    (12k, +10%…) work on full values</div>`;
+}
+function wireFmtPop(pop) {
+  const apply = () => {
+    FMT.dec = pop.querySelector("#fDec").value;
+    FMT.neg = pop.querySelector("#fNeg").value;
+    FMT.scale = Number(pop.querySelector("#fScale").value);
+    FMT.pct = pop.querySelector("#fPct").checked;
+    FMT.dash0 = pop.querySelector("#fDash").checked;
+    saveFmt();
+  };
+  pop.querySelectorAll("select, input").forEach(el => el.addEventListener("change", apply));
+}
+document.addEventListener("click", e => {
+  const pop = document.getElementById("fmtPop");
+  if (pop && !e.target.closest("#fmtPop") && !e.target.closest("#fmtBtn")) pop.style.display = "none";
+});
+
 const ENTRY_LEGEND = `<span class="ht">cell entry codes</span><span class="hk">MIS-Alea style</span>
   <div class="hx" style="margin-top:.4rem;font-family:'SF Mono',ui-monospace,monospace;font-size:.74rem;background:#fafbfd;border:1px solid var(--line);border-radius:6px;padding:.35rem .55rem;white-space:pre-wrap">12k · 1.5m      thousands / millions
 (500)           negative, accounting style

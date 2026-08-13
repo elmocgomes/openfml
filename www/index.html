@@ -68,7 +68,14 @@
   .page { display:none; height:100%; }
   .page.on { display:flex; flex-direction:column; }
   .toolbar { display:flex; gap:.55rem; align-items:center; padding:.6rem 1.3rem;
-    background:var(--card); border-bottom:1px solid var(--line); flex-wrap:wrap; }
+    background:var(--card); border-bottom:1px solid var(--line); flex-wrap:wrap; position:relative; }
+  #fmtPop, .fmtpop { position:absolute; top:calc(100% + 4px); right:1.3rem; z-index:35;
+    background:var(--card); border:1px solid var(--line); border-radius:10px;
+    box-shadow:0 12px 40px rgba(16,30,54,.28); padding:.7rem .9rem; min-width:250px; }
+  #fmtPop label, .fmtpop label { display:flex; align-items:center; gap:.5rem; font-size:.82rem;
+    margin:.3rem 0; justify-content:space-between; }
+  #fmtPop select, .fmtpop select { border:1px solid var(--line); border-radius:5px; padding:.15rem .3rem; font-size:.8rem; }
+  #fmtPop .fnote, .fmtpop .fnote { color:var(--mut); font-size:.72rem; margin-top:.4rem; }
   .toolbar .tlbl { color:var(--mut); font-size:.72rem; text-transform:uppercase; letter-spacing:.6px; }
   #scen { display:flex; gap:.35rem; }
   #scen button { background:#fafbfd; border:1px solid var(--line); color:var(--ink); font-weight:500; }
@@ -378,6 +385,8 @@
         <button id="addMemberBtn" title="Add a member to a dimension" style="display:none">Add member…</button>
         <span id="amForm" style="display:none"></span>
         <span class="chip" id="entryHelp" style="cursor:help">⌨ entry codes</span>
+        <span class="chip" id="fmtBtn" style="cursor:pointer">Aa format</span>
+        <div id="fmtPop" style="display:none"></div>
       </div>
       <div id="right"><table id="tbl"></table></div>
     </div>
@@ -592,6 +601,41 @@ function syncPatchResult(r2, us, what) {
   renderTabs();
   render(r2);
 }
+// ---- display formatting: finance-grade, user-editable ------------------
+let FMT = Object.assign({ dec: "auto", neg: "paren", scale: 1, pct: true, dash0: false },
+  JSON.parse(localStorage.getItem("fml:fmt") || "{}"));
+function saveFmt() {
+  localStorage.setItem("fml:fmt", JSON.stringify(FMT));
+  if (lastState) render(lastState);
+  renderFmtBtn();
+}
+function isScaledUnit(unit) {
+  return FMT.scale > 1 && unit !== "1" && unit !== "" && !unit.includes("/");
+}
+function fmtCell(v, unit, rowMax) {
+  if (v === null || v === undefined) return "·";
+  const dimless = unit === "1" || unit === "";
+  // Rates read as percents (2.2% beats 0.022) — only for small dimensionless rows.
+  if (FMT.pct && dimless && Math.abs(rowMax) < 10) {
+    const p = v * 100;
+    return (p < 0 ? "(" : "") + Math.abs(p).toLocaleString("en-US",
+      { minimumFractionDigits: 0, maximumFractionDigits: 1 }) + "%" + (p < 0 ? ")" : "");
+  }
+  if (FMT.dash0 && v === 0) return "–";
+  const scaled = isScaledUnit(unit);
+  const x = scaled ? v / FMT.scale : v;
+  const rm = Math.abs(scaled ? rowMax / FMT.scale : rowMax);
+  // Uniform decimals PER ROW (auto): big rows 0dp, mid 1dp, price-like 2dp.
+  const d = FMT.dec === "auto" ? (rm >= 1000 ? 0 : rm >= 20 ? 1 : 2) : Number(FMT.dec);
+  const s = Math.abs(x).toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
+  if (x < 0) return FMT.neg === "paren" ? `(${s})` : `-${s}`;
+  return s;
+}
+function renderFmtBtn() {
+  const b = document.getElementById("fmtBtn");
+  if (b) b.textContent = "Aa format" + (FMT.scale > 1 ? ` · ×${FMT.scale === 1e6 ? "1m" : "1k"}` : "");
+}
+
 // ---- Alea-style cell entry: multipliers, relative entry, spreading ----
 // 12k 1.5m (500) +500 -10% *1.1 10% | 500> 6k/> 6k%> g5> | Enter↓ Tab→
 function parseEntry(raw, cur) {
@@ -792,6 +836,7 @@ function render(r) {
     const cls = s.input ? "inp" : "";
     const nameData = SERVER ? "" : ` class="mname" data-nkey="${s.key}" data-nmember="${s.member || ""}" data-nt="${s.range[0]}"`;
     html += `<tr class="${cls}"><td title="${s.name}"${nameData}>${s.name}<span class="unit">${s.unit}</span></td>`;
+    const rowMax = Math.max(0, ...s.vals.filter(x => x !== null).map(Math.abs));
     s.vals.forEach((v, t) => {
       const inRange = t >= s.range[0] && t <= s.range[1];
       let editable = !inScen && (s.edit === "all" ? inRange : Array.isArray(s.edit) && s.edit.includes(t));
@@ -807,17 +852,17 @@ function render(r) {
         const differs = b !== null && v !== null && Math.abs(v - b) > 1e-9;
         const dir = differs ? (v > b ? "dup" : "ddown") : "";
         const tip = differs ? ` title="Base: ${fmt(b)}"` : "";
-        html += `<td class="${dir}${inRange ? "" : " out"}${v !== null && v < 0 ? " neg" : ""}"${tip}>${fmt(v)}</td>`;
+        html += `<td class="${dir}${inRange ? "" : " out"}${v !== null && v < 0 ? " neg" : ""}"${tip}>${fmtCell(v, s.unit, rowMax)}</td>`;
       } else if (simBands && simBands[s.name] && inRange && !s.input) {
         const [b10, b50, b90] = simBands[s.name][t] || [null, null, null];
         const band = (b10 !== null && Math.abs(b90 - b10) > 1e-9)
-          ? `<span class="band">${fmt(b10)} … ${fmt(b90)}</span>` : "";
-        html += `<td class="${b50 !== null && b50 < 0 ? "neg" : ""}" title="p10 ${fmt(b10)} · p50 ${fmt(b50)} · p90 ${fmt(b90)}">${fmt(b50)}${band}</td>`;
+          ? `<span class="band">${fmtCell(b10, s.unit, rowMax)} … ${fmtCell(b90, s.unit, rowMax)}</span>` : "";
+        html += `<td class="${b50 !== null && b50 < 0 ? "neg" : ""}" title="p10 ${fmt(b10)} · p50 ${fmt(b50)} · p90 ${fmt(b90)}">${fmtCell(b50, s.unit, rowMax)}${band}</td>`;
       } else {
         const changed = prev[s.name] && prev[s.name][t] !== v;
         const torn = !SERVER && !inScen && inRange && !s.input ? " torn" : "";
         const tdata = torn ? ` data-tkey="${s.key}" data-tmember="${s.member || ""}" data-tt="${t}" title="click: explain this number"` : "";
-        html += `<td class="${changed ? "chg" : ""}${inRange ? "" : " out"}${torn}${v !== null && v < 0 ? " neg" : ""}"${tdata}>${fmt(v)}</td>`;
+        html += `<td class="${changed ? "chg" : ""}${inRange ? "" : " out"}${torn}${v !== null && v < 0 ? " neg" : ""}"${tdata}>${fmtCell(v, s.unit, rowMax)}</td>`;
       }
     });
     prev[s.name] = s.vals;
@@ -1432,6 +1477,45 @@ function wordDocHtml(word) {
   src.addEventListener("scroll", hideTip);
   src.addEventListener("keydown", hideTip);
 })();
+
+// ---- the Format popover: user-editable display formatting --------------
+function openFmtPop() {
+  const pop = document.getElementById("fmtPop");
+  if (pop.style.display !== "none") { pop.style.display = "none"; return; }
+  pop.innerHTML = `
+    <label>decimals <select id="fDec">
+      <option value="auto"${FMT.dec === "auto" ? " selected" : ""}>auto (per row)</option>
+      <option value="0"${FMT.dec === "0" ? " selected" : ""}>0</option>
+      <option value="1"${FMT.dec === "1" ? " selected" : ""}>1</option>
+      <option value="2"${FMT.dec === "2" ? " selected" : ""}>2</option></select></label>
+    <label>negatives <select id="fNeg">
+      <option value="paren"${FMT.neg === "paren" ? " selected" : ""}>(1,234)</option>
+      <option value="minus"${FMT.neg === "minus" ? " selected" : ""}>-1,234</option></select></label>
+    <label>show amounts <select id="fScale">
+      <option value="1"${FMT.scale === 1 ? " selected" : ""}>at full value</option>
+      <option value="1000"${FMT.scale === 1000 ? " selected" : ""}>in thousands (×1k)</option>
+      <option value="1000000"${FMT.scale === 1e6 ? " selected" : ""}>in millions (×1m)</option></select></label>
+    <label>rates as percent <input type="checkbox" id="fPct"${FMT.pct ? " checked" : ""}></label>
+    <label>zeros as – <input type="checkbox" id="fDash"${FMT.dash0 ? " checked" : ""}></label>
+    <div class="fnote">display only — cells you type into always hold full values,
+    and entry codes (12k, +10%…) work on full values</div>`;
+  pop.style.display = "";
+  const apply = () => {
+    FMT.dec = pop.querySelector("#fDec").value;
+    FMT.neg = pop.querySelector("#fNeg").value;
+    FMT.scale = Number(pop.querySelector("#fScale").value);
+    FMT.pct = pop.querySelector("#fPct").checked;
+    FMT.dash0 = pop.querySelector("#fDash").checked;
+    saveFmt();
+  };
+  pop.querySelectorAll("select, input").forEach(el => el.addEventListener("change", apply));
+}
+document.getElementById("fmtBtn").addEventListener("click", e => { e.stopPropagation(); openFmtPop(); });
+document.addEventListener("click", e => {
+  const pop = document.getElementById("fmtPop");
+  if (pop && pop.style.display !== "none" && !e.target.closest("#fmtPop")) pop.style.display = "none";
+});
+renderFmtBtn();
 
 document.getElementById("entryHelp").addEventListener("mouseover", e =>
   showTipAt(e.clientX, e.clientY, ENTRY_LEGEND));
