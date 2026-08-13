@@ -626,6 +626,20 @@ The scheduler generalizes to the (measure × member × period) micro-graph.
   privileges** — connected: the full user × grants matrix with the
   caller's row highlighted; local: the literal-editable input set and
   a pointer to server mode.
+- **Menu bar (slice 18)** — the workbench header reorganized from a
+  strip of buttons into a desktop-app menu bar: **File** (save to disk,
+  draft state with revert), **Model** (simulate uncertainty, add
+  period, add member with its inline form living inside the dropdown),
+  **Scenario** (checkmarked list; the menu label carries the active
+  scenario; hidden when the model declares none, and hidden in client
+  mode where scenario preview would need the local wasm session — which
+  also retires a latent crash), and **View** (code/split/grid/model,
+  checkmarked). The assert pills collapsed into a single status
+  indicator at the right — "✓ 4 checks" green or "✗ 1 check failing"
+  red and throbbing — with the per-assert detail in its dropdown.
+  One menu open at a time, outside-click and Escape close, items close
+  on activation (`data-keep` for forms). Client mode keeps only what a
+  contributor needs: brand, model, View, checks, and the process strip.
 - Still ahead — per-declaration unit-inference/scheduling queries,
   integer minor-unit representation, read-side information-flow
   control, TLS / reverse-proxy deployment.

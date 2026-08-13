@@ -32,31 +32,47 @@
     letter-spacing:1px; text-transform:uppercase; margin-top:.1rem; }
   #modelSel { background:var(--navy2); color:#fff; border:1px solid var(--navy3);
     border-radius:6px; padding:.28rem .5rem; font-size:.85rem; max-width:12em; }
-  header .actions { display:flex; gap:.4rem; align-items:center; padding-left:.8rem;
-    border-left:1px solid var(--navy3); }
-  header .actions button, #scen button { background:transparent; color:#cfd9e6;
-    border:1px solid var(--navy3); font-weight:500; font-size:.78rem; padding:.2rem .6rem; }
-  header .actions button:hover, #scen button:hover { background:var(--navy2); color:#fff; filter:none; }
-  header .actions input, header .actions select { background:var(--navy2); color:#fff;
-    border:1px solid var(--navy3); border-radius:5px; padding:.14rem .35rem; font-size:.78rem; }
-  #scen { display:flex; gap:.35rem; }
-  #scen button.on { background:var(--warnbg); color:var(--warn); border-color:transparent; font-weight:700; }
-  #simBtn.on { background:#f3e8fd; color:#7b3ff2; border-color:transparent; font-weight:700; }
-  #draftState { font-size:.75rem; color:#8fa3bb; margin-left:.2rem; }
-  #draftState button { border:0; background:transparent; color:#cfd9e6;
-    text-decoration:underline; padding:0; margin-left:.3rem; }
-  header .views { margin-left:auto; display:flex; background:var(--navy2);
-    border:1px solid var(--navy3); border-radius:7px; padding:2px; }
-  header .views button { background:transparent; color:#8fa3bb; border:0;
-    font-size:.76rem; font-weight:600; padding:.16rem .65rem; border-radius:5px; }
-  header .views button.on { background:var(--pri); color:#fff; }
-  #asserts { display:flex; gap:.35rem; flex-wrap:wrap; }
-  #asserts .pass, #asserts .fail { padding:.14rem .6rem; border-radius:999px;
-    font-size:.72rem; font-weight:600; }
-  #asserts .pass { background:rgba(46,160,87,.22); color:#8fe2ac; }
-  #asserts .fail { background:var(--badbg); color:var(--bad); font-weight:700;
-    animation: throb 1.2s ease-in-out infinite; }
+  /* ---- the menu bar: File · Model · Scenario · View, checks at right ---- */
+  #menubar { display:flex; align-items:center; gap:.1rem; }
+  header .actions { display:contents; }
+  header .menu { position:relative; }
+  header .menu.right { margin-left:auto; }
+  header .mbtn { background:transparent; border:0; color:#cfd9e6; font-size:.85rem;
+    font-weight:500; padding:.32rem .7rem; border-radius:6px; }
+  header .mbtn:hover, header .menu.open .mbtn { background:var(--navy2); color:#fff; filter:none; }
+  #checksLbl { font-weight:600; color:#8fe2ac; }
+  #checksLbl.bad { color:#ffa19c; animation: throb 1.2s ease-in-out infinite; }
   @keyframes throb { 50% { opacity:.55; } }
+  header .mdrop { display:none; position:absolute; top:calc(100% + 5px); left:0; z-index:30;
+    background:var(--card); color:var(--ink); border:1px solid var(--line); border-radius:10px;
+    box-shadow:0 12px 40px rgba(16,30,54,.28); min-width:210px; padding:.35rem; }
+  header .menu.open .mdrop { display:block; }
+  header .mdrop.rt { left:auto; right:0; }
+  header .mdrop button { display:flex; width:100%; text-align:left; background:transparent;
+    color:var(--ink); border:0; border-radius:6px; font-size:.84rem; font-weight:500;
+    padding:.42rem .6rem; cursor:pointer; align-items:center; gap:.5rem; }
+  header .mdrop button:hover { background:var(--pri2); color:var(--pri); filter:none; }
+  header .mdrop .mkey { margin-left:auto; color:var(--mut); font-size:.72rem; }
+  header .msep { height:1px; background:var(--line); margin:.3rem .2rem; }
+  header .minfo { display:block; padding:.3rem .6rem; font-size:.78rem; color:var(--mut); }
+  header .minfo button { display:inline; width:auto; padding:0 .2rem; color:var(--pri);
+    text-decoration:underline; font-size:inherit; }
+  header .mdrop input, header .mdrop select { border:1px solid var(--line); background:#fff;
+    color:var(--ink); border-radius:5px; padding:.22rem .4rem; font-size:.8rem; margin:.15rem 0; }
+  /* selectable items carry a leading checkmark slot */
+  header .views button::before, #scen button::before { content:""; display:inline-block; width:1em; }
+  header .views button.on::before, #scen button.on::before { content:"✓"; color:var(--pri); font-weight:700; }
+  header .views button.on, #scen button.on { color:var(--pri); font-weight:600; }
+  header .views, #scen { display:block; }
+  #simBtn.on::after { content:"active"; margin-left:auto; color:#7b3ff2; font-size:.7rem;
+    font-weight:700; text-transform:uppercase; letter-spacing:.5px; }
+  #draftState:empty { display:none; }
+  /* checks dropdown: one row per assert */
+  #asserts { display:block; min-width:240px; }
+  #asserts .pass, #asserts .fail { display:block; padding:.32rem .6rem; border-radius:6px;
+    font-size:.82rem; }
+  #asserts .pass { color: var(--ok); }
+  #asserts .fail { color: var(--bad); background:var(--badbg); font-weight:700; }
   .pass::before { content:"✓ "; } .fail::before { content:"✗ "; }
 
   /* ---- status strips ---- */
@@ -287,19 +303,46 @@
 <header>
   <div class="brand">Workbench<small>powered by fml</small></div>
   <select id="modelSel" title="Model"></select>
-  <span id="scen"></span>
-  <span class="actions">
-    <button id="simBtn" title="Monte Carlo over distribution inputs (500 trials)">simulate</button>
-    <button id="addPeriodBtn" title="Extend the calendar by one period (full-range maps copy their last entry)">+ period</button>
-    <button id="addMemberBtn" title="Add a member to a dimension (arms inserted into every match)" style="display:none">+ member</button>
-    <span id="amForm" style="display:none"></span>
-    <button id="saveBtn" title="Save .fml to disk (Ctrl/Cmd+S)">save</button>
-    <span id="draftState"></span>
-  </span>
-  <span class="views" id="views" title="Layout">
-    <button data-v="code">code</button><button data-v="split" class="on">split</button><button data-v="grid">grid</button><button data-v="model">model</button>
-  </span>
-  <span id="asserts" title="Model checks — every assert, every period"></span>
+  <nav id="menubar">
+    <span class="actions">
+      <div class="menu">
+        <button class="mbtn">File</button>
+        <div class="mdrop">
+          <button id="saveBtn" title="Save the active file to disk">Save to disk…<span class="mkey">⌘S</span></button>
+          <span id="draftState" class="minfo"></span>
+        </div>
+      </div>
+      <div class="menu">
+        <button class="mbtn">Model</button>
+        <div class="mdrop">
+          <button id="simBtn" title="Monte Carlo over distribution inputs (500 trials)">Simulate uncertainty</button>
+          <div class="msep"></div>
+          <button id="addPeriodBtn" title="Extend the calendar by one period (full-range maps copy their last entry)">Add period</button>
+          <button id="addMemberBtn" data-keep="1" title="Add a member to a dimension (arms inserted into every match)" style="display:none">Add member…</button>
+          <span id="amForm" class="minfo" style="display:none"></span>
+        </div>
+      </div>
+    </span>
+    <div class="menu" id="scenMenu" style="display:none">
+      <button class="mbtn" id="scenMenuLbl">Scenario</button>
+      <div class="mdrop"><span id="scen"></span></div>
+    </div>
+    <div class="menu">
+      <button class="mbtn">View</button>
+      <div class="mdrop">
+        <span class="views" id="views" title="Layout">
+          <button data-v="code">Code</button>
+          <button data-v="split" class="on">Split</button>
+          <button data-v="grid">Grid</button>
+          <button data-v="model">Model</button>
+        </span>
+      </div>
+    </div>
+  </nav>
+  <div class="menu right" id="checksMenu">
+    <button class="mbtn" id="checksLbl" title="Model checks — every assert, every period">Checks</button>
+    <div class="mdrop rt"><span id="asserts"></span></div>
+  </div>
 </header>
 <div id="scenBanner" style="display:none"></div>
 <div id="procBanner" style="display:none"></div>
@@ -446,6 +489,12 @@ function renderScenChips(r) {
   const names = ["Base", ...(r.scenarios || [])];
   activeScen = r.active || "Base";
   box.innerHTML = "";
+  // The Scenario menu exists only when the model declares scenarios —
+  // and only locally (scenario preview runs in the wasm session).
+  const menu = document.getElementById("scenMenu");
+  if (menu) menu.style.display = !SERVER && names.length > 1 ? "" : "none";
+  const lbl = document.getElementById("scenMenuLbl");
+  if (lbl) lbl.textContent = activeScen === "Base" ? "Scenario" : `Scenario · ${activeScen}`;
   if (names.length === 1) return;
   for (const n of names) {
     const b = document.createElement("button");
@@ -547,6 +596,16 @@ function render(r) {
   document.getElementById("tbl").innerHTML = html;
   document.getElementById("asserts").innerHTML = r.asserts.map(([n, ok, dev]) =>
     `<span class="${ok ? "pass" : "fail"}">${n}</span>`).join(" ");
+  // Collapse the checks into one status word; the dropdown holds the detail.
+  const checksLbl = document.getElementById("checksLbl");
+  if (checksLbl) {
+    const fails = r.asserts.filter(([, ok]) => !ok).length;
+    document.getElementById("checksMenu").style.display = r.asserts.length ? "" : "none";
+    checksLbl.textContent = fails
+      ? `✗ ${fails} check${fails === 1 ? "" : "s"} failing`
+      : `✓ ${r.asserts.length} checks`;
+    checksLbl.classList.toggle("bad", fails > 0);
+  }
   document.getElementById("scalars").innerHTML = r.scalars.map(s =>
     `<span${SERVER ? "" : ` class="scx" data-s="${s.name}" title="click: explain this number" style="cursor:pointer"`}>${s.name} = <b>${fmt(s.val)}</b><span class="unit">${s.unit}</span></span>`).join("");
   document.querySelectorAll("#scalars .scx").forEach(sp =>
@@ -1009,6 +1068,25 @@ async function renderModel() {
     setView("code");
   }));
 }
+
+// ---- menu bar: one menu open at a time; items close on activation ----
+document.querySelectorAll("header .menu > .mbtn").forEach(btn => {
+  btn.addEventListener("click", e => {
+    e.stopPropagation();
+    const m = btn.parentElement;
+    const was = m.classList.contains("open");
+    document.querySelectorAll("header .menu.open").forEach(x => x.classList.remove("open"));
+    if (!was) m.classList.add("open");
+  });
+});
+const closeMenus = () =>
+  document.querySelectorAll("header .menu.open").forEach(x => x.classList.remove("open"));
+document.addEventListener("click", e => {
+  if (!e.target.closest("header .menu")) { closeMenus(); return; }
+  const it = e.target.closest("header .mdrop button");
+  if (it && !it.dataset.keep) closeMenus();
+});
+document.addEventListener("keydown", e => { if (e.key === "Escape") closeMenus(); });
 
 // ---- layout: code / split / grid / model views + draggable divider ----
 // (wired before the client-mode fork so connected users get the views too)
