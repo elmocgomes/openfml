@@ -118,6 +118,24 @@
   .rolebadge.viewer { background: #eef0f3; color: var(--mut); }
   .tok { width: 100%; font: .8rem ui-monospace, monospace; padding: .35rem .5rem; margin-top: .4rem;
          border: 1px solid var(--line); border-radius: 6px; background: #fafbfd; }
+  /* ---- hover documentation ---- */
+  #hovertip { position: fixed; z-index: 60; max-width: 380px; background: var(--card);
+    border: 1px solid var(--line); border-radius: 10px; padding: .55rem .75rem;
+    box-shadow: 0 10px 34px rgba(16,30,54,.24); font-size: .8rem; display: none;
+    pointer-events: none; line-height: 1.5; }
+  #hovertip .ht { font-family: "SF Mono", ui-monospace, monospace; font-weight: 700;
+    font-size: .84rem; color: var(--navy2); }
+  #hovertip .hk { display: inline-block; margin-left: .4rem; background: var(--pri2);
+    color: var(--pri); border-radius: 999px; padding: .02rem .5rem; font-size: .68rem; font-weight: 700; }
+  #hovertip .hd { color: #333c4b; margin-top: .15rem; }
+  #hovertip .hx { font-family: "SF Mono", ui-monospace, monospace; font-size: .74rem;
+    color: var(--mut); background: #fafbfd; border: 1px solid var(--line); border-radius: 6px;
+    padding: .25rem .45rem; margin-top: .35rem; white-space: pre-wrap; }
+  #hovertip .hv { font-family: "SF Mono", ui-monospace, monospace;
+    font-variant-numeric: tabular-nums; font-weight: 700; }
+  .tdoc { border-bottom: 1px dotted #b3bccb; cursor: help; }
+  [data-mh] { cursor: help; }
+
   /* ---- formula trace ---- */
   .tnode { border-left: 2px solid var(--line); margin: .3rem 0 .3rem .35rem; padding: .25rem 0 .25rem .8rem; }
   .tnode.root { border-left-color: var(--pri); }
@@ -181,6 +199,7 @@
   <div id="content"></div>
 </div>
 <div id="toast"></div>
+<div id="hovertip"></div>
 
 <script type="module">
 const P = new URLSearchParams(location.search);
@@ -253,6 +272,7 @@ async function refresh() {
   lastSeq = STATE.seq;
   const g = await get("/grants" + qs());
   GRANTS = g.ok ? (g.users.find(u => u.user === ME.user) || { grants: [] }).grants : [];
+  ensureInfo();
   renderRound();
 }
 function canEdit() {
@@ -320,11 +340,11 @@ function pageEntry() {
   for (const r of s.series || []) {
     const grouped = !!r.member;
     if (grouped && r.key !== lastKey) {
-      rows += `<tr class="ghead"><td colspan="${s.periods.length + 1}">${esc(r.key)}<span class="unit">${esc(r.unit)}</span></td></tr>`;
+      rows += `<tr class="ghead"><td colspan="${s.periods.length + 1}" data-mh="${esc(r.key)}">${esc(r.key)}<span class="unit">${esc(r.unit)}</span></td></tr>`;
     }
     lastKey = grouped ? r.key : null;
     const label = grouped ? r.member : r.name;
-    rows += `<tr><td class="${grouped ? "mname" : ""}">${esc(label)}${grouped ? "" : `<span class="unit">${esc(r.unit)}</span>`}</td>`;
+    rows += `<tr><td class="${grouped ? "mname" : ""}" data-mh="${esc(r.key)}">${esc(label)}${grouped ? "" : `<span class="unit">${esc(r.unit)}</span>`}</td>`;
     r.vals.forEach((v, t) => {
       const inRange = t >= r.range[0] && t <= r.range[1];
       const sited = r.edit === "all" ? inRange : Array.isArray(r.edit) && r.edit.includes(t);
@@ -376,6 +396,98 @@ function pageEntry() {
 }
 
 let TRACE_INFO = null, traceOpen = new Set(), traceRoot = null;
+const DOCS = {
+  model:     ["declaration", "Names the model. Every file starts with one.", "model acme.industrial_budget"],
+  calendar:  ["declaration", "The timeline every series runs on — yearly, quarterly or monthly.", "calendar q = quarterly 2026-Q1 .. 2026-Q4"],
+  period:    ["declaration", "Names a sub-range of the calendar — e.g. the closed (actualized) months.", "period closed = 2026-Q1 .. 2026-Q2"],
+  dimension: ["declaration", "A named breakdown — product lines, cost centers, entities. 'tree' adds a roll-up group that always equals the sum of its members.", "dimension Line = tree { AllLines -> { Pipes, Valves, Fittings } }"],
+  currency:  ["declaration", "The model's home currency. Amounts in different currencies never add silently.", "currency kEUR"],
+  unit:      ["declaration", "Declares measurement units (tonnes, headcount, MWh). Every formula is checked against them — kEUR/t times t gives kEUR, never a silent mismatch.", "unit t, hc, mwh\nunit kEUR = 1000 EUR"],
+  input:     ["declaration", "A number someone asserts: a plan, a driver, a price. Inputs are editable in the grid (grants permitting); everything else is computed.", "input volume : t flow over Line, q = { 2026-Q1: 11_500, … }"],
+  data:      ["fact plane", "Loads an input from an external table (CSV) — for FACTS like actuals or market prices. Read-only everywhere; changes only by re-import. Optional sha256 pin locks the exact file contents.", "input energy_price : kEUR/mwh flow over q = data \"energy_prices.csv\""],
+  include:   ["structure", "Pulls another file into the model — each department owns its file; grid edits write back to the owner.", "include \"sales_plan.fml\""],
+  def:       ["library", "A reusable, typed calculation — the language's extension mechanism. $C is a unit variable (kEUR in → kEUR out, checked). Calls expand into ordinary formulas, so explain/simulate/goal-seek see straight through.", "def dcf(cash : $C flow, rate : rate, horizon : range) -> $C =\n  npv(rate, cash over horizon)"],
+  solve:     ["declaration", "Declares a circular block (interest ↔ debt ↔ balance) solved as a fixpoint each period.", "solve balance { debt = …  interest = debt * i }"],
+  assert:    ["declaration", "A covenant or sanity check, verified every period. Failing checks turn red in the header.", "assert margin_floor over q : ebitda >= total_revenue * 12%"],
+  scenario:  ["declaration", "A named what-if: override inputs, everything downstream recomputes. Base stays untouched.", "scenario Downturn from Base { price = price * 95% }"],
+  correlate: ["risk", "Ties two uncertain inputs together in simulation (rank correlation via a Gaussian copula).", "correlate margin, growth = 0.7"],
+  allocate:  ["declaration", "Splits a pot across a dimension in proportion to a driver — with 'round dp', the pieces re-add to the pot EXACTLY, to the cent.", "allocate overhead_alloc : kEUR flow over Line, q round 2 =\n  plant_overhead by revenue"],
+  eliminate: ["consolidation", "Declares intercompany pairs that must cancel on consolidation (auto-generates tie checks).", "eliminate ic_sales against ic_purchases"],
+  actuals:   ["time", "The switchover: use recorded actuals through the closed range, the forecast formula after it.", "sales = actuals sales_act until closed else prev(sales) * (1 + g)"],
+  until:     ["time", "Part of 'actuals … until <range> else …' — the boundary between recorded and forecast periods."],
+  over:      ["typing", "Declares what a measure ranges over: dimensions and/or the calendar (or a sub-range).", "revenue : kEUR flow over Line, q = volume * price"],
+  init:      ["time", "The starting value for a series that references its own past.", "asset_base : kEUR stock over q init: 12_000 = prev(asset_base) + capex - depreciation"],
+  prev:      ["time", "Last period's value of a measure — the roll-forward operator.", "prev(asset_base)   ·   prev(sales) init 500_000"],
+  when:      ["time", "A value only at the first/last period of a range.", "principal when first(loan_term)"],
+  match:     ["dispatch", "Case analysis — per dimension member (each cost center its own plan) or per period range.", "match Line { Pipes -> 1.1  Valves -> 2.3  Fittings -> 1.3 }"],
+  in:        ["conversion / dispatch", "Inside match t: tests period membership. On values: unit conversion — 'x in USD at fx' (direction follows the units) or scale ('x in EUR')."],
+  at:        ["conversion", "Supplies the rate for a currency conversion: value in USD at eurusd."],
+  sum:       ["aggregation", "Adds up: over a dimension (sum[Line](revenue)), a named range (sum[q](ebitda)), or a window (sum(x[t-3 .. t])).", "fy_ebitda : kEUR = sum[q](ebitda)"],
+  npv:       ["finance", "Present value of a flow over a range at a per-period rate — the discounting workhorse behind dcf().", "npv(discount_q, free_cash over q)"],
+  irr:       ["finance", "The internal rate of return of a measure's flow over a calendar.", "irr(q, project_cash)"],
+  annualize: ["finance", "Scales a per-period rate/flow to a yearly figure."],
+  year:      ["time", "year(t) — the calendar year of the current period, usable in formulas."],
+  min:       ["math", "The smaller of its arguments.", "min(draw_need, facility_cap)"],
+  max:       ["math", "The larger of its arguments.", "max(0, taxable_income)"],
+  metalog:   ["risk", "A flexible distribution fitted from your own P10/P50/P90 view. Deterministic runs use the median; Simulate draws from it.", "input growth : rate ~ metalog { p10: 1%, p50: 4%, p90: 9% }"],
+  uniform:   ["risk", "Equally likely anywhere between two bounds.", "~ uniform(0.10, 0.14)"],
+  normal:    ["risk", "The bell curve: mean and standard deviation.", "~ normal(22%, 2%) per period"],
+  per:       ["risk", "'per period': a fresh independent draw every period (shocks) instead of one draw per trial (parameter uncertainty)."],
+  by:        ["allocation", "The driver in an allocate: split the pot in proportion to this.", "allocate … = plant_overhead by revenue"],
+  round:     ["precision", "Snap stored values to N decimals (posted amounts). In allocate: cent-exact largest-remainder split. Policies: half_up (default), half_even, floor, ceil.", "price_posted : EUR over m round 2 = raw_price"],
+  tolerance: ["solver", "How close a solve block must get before it accepts convergence."],
+  relax:     ["solver", "Tearing form of solve: name the circular variable and its starting guess.", "solve sculpt { relax debt init 1_000 }"],
+  from:      ["scenario", "Scenario inheritance: start from another scenario's overrides.", "scenario Crash from Downturn { … }"],
+  functional:["consolidation", "Marks the dimension whose members carry their own local currencies."],
+  sha256:    ["fact plane", "Pins a data file to its exact content hash — the model refuses changed facts until the pin is updated deliberately."],
+  flow:      ["typing", "A per-period amount (revenue, spend) — sums across periods are meaningful."],
+  stock:     ["typing", "A balance at a point in time (assets, debt) — carried forward, not summed."],
+  rate:      ["typing", "A dimensionless per-period ratio (growth, discount, tax)."],
+  ratio:     ["typing", "A dimensionless proportion."],
+  tree:      ["dimension", "Dimension form with a roll-up group equal to the sum of its members."],
+  list:      ["dimension", "Dimension form without a roll-up member."],
+};
+function ensureInfo() {
+  if (TRACE_INFO && TRACE_INFO._model === MODEL) return;
+  get("/info" + qs()).then(r => { if (r.ok) { r._model = MODEL; TRACE_INFO = r; } }).catch(() => {});
+}
+const hoverTip = $("hovertip");
+function hideTip() { hoverTip.style.display = "none"; }
+function showTipAt(x, y, html) {
+  hoverTip.innerHTML = html;
+  hoverTip.style.display = "block";
+  const w = hoverTip.offsetWidth, h = hoverTip.offsetHeight;
+  hoverTip.style.left = Math.min(x + 14, window.innerWidth - w - 10) + "px";
+  hoverTip.style.top = (y + 18 + h > window.innerHeight ? y - h - 10 : y + 18) + "px";
+}
+function measureCard(name) {
+  const info = TRACE_INFO && TRACE_INFO.ok ? TRACE_INFO : null;
+  const m = info && info.measures.find(x => x.name === name);
+  if (!m) return null;
+  const val = tval(name);
+  const kind = m.input ? (m.data ? "fact" : "input") : m.solve ? "solve member" : "computed";
+  const f = m.data ? `facts from ${m.data}` : (m.formula || "");
+  return `<span class="ht">${esc(name)}</span><span class="hk">${kind}</span><span class="hk">${esc(m.unit)}</span>
+    ${val ? `<div class="hd">currently <span class="hv">${val.v}</span> <span style="color:var(--mut)">${esc(val.u)}</span></div>` : ""}
+    ${f ? `<div class="hx">= ${esc(f.length > 160 ? f.slice(0, 160) + "…" : f)}</div>` : ""}`;
+}
+function docCard(word) {
+  const d = DOCS[word];
+  if (!d) return null;
+  return `<span class="ht">${esc(word)}</span><span class="hk">${esc(d[0])}</span>
+    <div class="hd">${esc(d[1])}</div>${d[2] ? `<div class="hx">${esc(d[2])}</div>` : ""}`;
+}
+document.addEventListener("mouseover", e => {
+  const el = e.target.closest ? e.target.closest(".tref, .tdoc, [data-mh]") : null;
+  if (!el) { hideTip(); return; }
+  ensureInfo();
+  const html = el.classList.contains("tdoc") ? docCard(el.dataset.w)
+    : measureCard(el.dataset.n || el.dataset.mh);
+  if (html) showTipAt(e.clientX, e.clientY, html); else hideTip();
+});
+document.addEventListener("scroll", hideTip, true);
+
+
 function tval(name) {
   const s = (STATE.series || []).filter(r => r.key === name);
   if (s.length) {
@@ -397,7 +509,7 @@ function tformula(m, byName) {
   return esc(m.formula).split(/([A-Za-z_$][A-Za-z0-9_]*)/g).map(p =>
     byName[p] && p !== m.name
       ? `<span class="tref${traceOpen.has(m.name + "→" + p) ? " openref" : ""}" data-of="${esc(m.name)}" data-n="${esc(p)}">${p}</span>`
-      : p).join("");
+      : DOCS[p] ? `<span class="tdoc" data-w="${esc(p)}">${p}</span>` : p).join("");
 }
 function tnode(name, byName, seen, root) {
   const m = byName[name];
