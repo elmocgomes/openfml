@@ -34,7 +34,7 @@ platform you target).
 
 ```bash
 cargo install --path .          # from a checkout
-# or, once hosted:  cargo install --git <repo-url> openfml
+# or, once hosted:  cargo install --git https://github.com/elmocgomes/openfml openfml
 ```
 
 This installs `openfml`, `openfml-server` and `openfml-lsp`. The server
