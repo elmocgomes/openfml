@@ -1,7 +1,7 @@
 //! fml-server — the budget-process server (zero-dependency HTTP/1.1).
 //!
-//!   fml-server <config-dir> <port>
-//!   fml-server token <user> [secret-file]
+//!   openfml-server <config-dir> <port>
+//!   openfml-server token <user> [secret-file]
 //!
 //! The config directory holds the whole deployment, declaratively:
 //!   users.cfg      user: department role     (admin | editor | viewer)
@@ -25,11 +25,11 @@
 //! live in the same hash-chained log as the numbers — who submitted when
 //! is as tamper-evident as the values themselves.
 
-use fml::server::{
+use openfml::server::{
     apply_event, gate, make_token, replay_signed, sign_line, verify_token, Access, Action,
     Directory, Event, Process, Role, User, GENESIS,
 };
-use fml::Session;
+use openfml::Session;
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::TcpListener;
@@ -186,18 +186,18 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.len() >= 3 && args[1] == "token" {
         let path = args.get(3).map(String::as_str).unwrap_or("server.secret");
-        let secret = fml::crypto::load_or_create_secret(Path::new(path)).expect("secret");
+        let secret = openfml::crypto::load_or_create_secret(Path::new(path)).expect("secret");
         println!("{}", make_token(&secret, &args[2]));
         return;
     }
     if args.len() != 3 {
-        eprintln!("usage: fml-server <config-dir> <port>");
-        eprintln!("       fml-server token <user> [secret-file]");
+        eprintln!("usage: openopenfml-server <config-dir> <port>");
+        eprintln!("       openfml-server token <user> [secret-file]");
         std::process::exit(2);
     }
     let dir = PathBuf::from(&args[1]);
     let port = &args[2];
-    let secret = fml::crypto::load_or_create_secret(&dir.join("server.secret")).expect("server secret");
+    let secret = openfml::crypto::load_or_create_secret(&dir.join("server.secret")).expect("server secret");
     let directory = Directory::parse(&std::fs::read_to_string(dir.join("users.cfg")).expect("read users.cfg"))
         .expect("parse users.cfg");
     let access = Access::parse(&std::fs::read_to_string(dir.join("access.cfg")).expect("read access.cfg"))
@@ -211,7 +211,7 @@ fn main() {
         let mpath = dir.join("models").join(&ma.file);
         let raw = std::fs::read_to_string(&mpath).unwrap_or_else(|e| panic!("read {}: {e}", mpath.display()));
         let base = dir.join("models");
-        let exp = fml::expand_includes_with_map(&ma.file, &raw, &mut |rel| {
+        let exp = openfml::expand_includes_with_map(&ma.file, &raw, &mut |rel| {
             std::fs::read_to_string(base.join(rel)).map_err(|e| format!("include {rel}: {e}"))
         })
         .expect("expand includes");
@@ -239,7 +239,7 @@ fn main() {
 
     let listener = TcpListener::bind(format!("127.0.0.1:{port}")).expect("bind");
     eprintln!(
-        "fml-server on 127.0.0.1:{port} — {} models, {} users, tokens via 'fml-server token <user>'",
+        "fml-server on 127.0.0.1:{port} — {} models, {} users, tokens via 'openfml-server token <user>'",
         states.len(),
         directory.users.len()
     );
@@ -391,7 +391,7 @@ fn main() {
                     st.next_seq - 1,
                     process_json(&st.process)
                 );
-                let json = fml::wasm::dump_state(&mut st.session, &stats, false);
+                let json = openfml::wasm::dump_state(&mut st.session, &stats, false);
                 respond(&mut stream, 200, &json);
             }
             ("GET", "/info") => {

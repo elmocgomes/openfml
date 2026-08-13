@@ -2,9 +2,9 @@
 //! additive terms — they sum to the value, signed. No sensitivity
 //! approximations: what can't be decomposed additively stays one term.
 
-use fml::Session;
+use openfml::Session;
 
-fn term_sum(ex: &fml::live::Explanation) -> f64 {
+fn term_sum(ex: &openfml::live::Explanation) -> f64 {
     ex.terms.iter().map(|t| t.value).sum()
 }
 

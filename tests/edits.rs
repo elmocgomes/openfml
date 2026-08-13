@@ -3,7 +3,7 @@
 //! rename a measure everywhere — both as source transformations that
 //! recompile cleanly with formatting preserved.
 
-use fml::Session;
+use openfml::Session;
 use std::collections::HashMap;
 
 fn team_session() -> Session {
@@ -12,7 +12,7 @@ fn team_session() -> Session {
         ("team_engineering.fml", include_str!("fixtures/team_engineering.fml")),
         ("team_operations.fml", include_str!("fixtures/team_operations.fml")),
     ];
-    let exp = fml::expand_includes_with_map(
+    let exp = openfml::expand_includes_with_map(
         "team_budget.fml",
         include_str!("fixtures/team_budget.fml"),
         &mut |p| {
@@ -64,7 +64,7 @@ fn add_period_reaches_into_included_files() {
         "broadcast file untouched"
     );
     // Recompile the whole multi-file model from the new texts.
-    let exp = fml::expand_includes_with_map("team_budget.fml", by_name["team_budget.fml"], &mut |p| {
+    let exp = openfml::expand_includes_with_map("team_budget.fml", by_name["team_budget.fml"], &mut |p| {
         by_name.get(p).map(|t| t.to_string()).ok_or_else(|| format!("missing {p}"))
     })
     .unwrap();

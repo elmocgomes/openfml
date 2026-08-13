@@ -3,8 +3,8 @@
 //! byte-exactly, and the SALVAGED model (broken declarations plus their
 //! transitive dependents dropped) still checks and runs.
 
-use fml::cst::{decl_name, parse_cst, Red, SyntaxKind};
-use fml::{parse_salvage, Parser, Session};
+use openfml::cst::{decl_name, parse_cst, Red, SyntaxKind};
+use openfml::{parse_salvage, Parser, Session};
 
 const BROKEN: &str = "model demo.res\n\
 calendar plan = yearly 2026 .. 2027\n\
@@ -29,7 +29,7 @@ fn broken_declarations_are_skipped_not_fatal() {
         .items
         .iter()
         .filter_map(|it| match it {
-            fml::ast::Item::Measure(m) => Some(m.name.as_str()),
+            openfml::ast::Item::Measure(m) => Some(m.name.as_str()),
             _ => None,
         })
         .collect();
@@ -78,8 +78,8 @@ fn salvage_drops_the_transitive_dependents_and_runs() {
     let mut s = Session::from_model_parts(
         &sal.model,
         BROKEN.to_string(),
-        vec![fml::SourceFile { name: "model".into(), text: BROKEN.to_string() }],
-        vec![fml::Segment { flat_start: 0, flat_end: BROKEN.len(), file: 0, local_start: 0 }],
+        vec![openfml::SourceFile { name: "model".into(), text: BROKEN.to_string() }],
+        vec![openfml::Segment { flat_start: 0, flat_end: BROKEN.len(), file: 0, local_start: 0 }],
     )
     .unwrap();
     s.run_full().unwrap();
@@ -93,13 +93,13 @@ fn recovery_works_at_the_first_and_last_declaration() {
         junk junk : :\nok : EUR flow over plan = 7\n";
     let (model, _, errors) = Parser::parse_resilient(first_broken).unwrap();
     assert_eq!(errors.len(), 1);
-    assert!(model.items.iter().any(|it| matches!(it, fml::ast::Item::Measure(m) if m.name == "ok")));
+    assert!(model.items.iter().any(|it| matches!(it, openfml::ast::Item::Measure(m) if m.name == "ok")));
 
     let last_broken = "model demo.l\ncalendar plan = yearly 2026 .. 2026\ncurrency EUR\n\
         ok : EUR flow over plan = 7\nbad : EUR flow over plan = ((\n";
     let (model2, _, errors2) = Parser::parse_resilient(last_broken).unwrap();
     assert_eq!(errors2.len(), 1);
-    assert!(model2.items.iter().any(|it| matches!(it, fml::ast::Item::Measure(m) if m.name == "ok")));
+    assert!(model2.items.iter().any(|it| matches!(it, openfml::ast::Item::Measure(m) if m.name == "ok")));
 }
 
 #[test]

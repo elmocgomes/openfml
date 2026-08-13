@@ -3,7 +3,7 @@
 //! re-lex to the same token count, so paths stay valid across any edit
 //! sequence.
 
-use fml::Session;
+use openfml::Session;
 
 #[test]
 fn many_length_changing_patches_in_one_declaration() {
@@ -23,7 +23,7 @@ fn many_length_changing_patches_in_one_declaration() {
     assert!(s.source().contains("{ 2026: 5, 2027: 99.5, 2028: 42, 2029: 7777777 }"), "{}", s.source());
     assert_eq!(s.get("tot", None, None).unwrap(), 5.0 + 99.5 + 42.0 + 7777777.0);
     // The round-trip theorem, after the whole sequence.
-    let fresh = fml::run(s.source()).unwrap();
+    let fresh = openfml::run(s.source()).unwrap();
     let tot = fresh.scalars.iter().find(|(n, _)| n == "tot").unwrap().1;
     assert_eq!(tot, s.get("tot", None, None).unwrap());
 }
@@ -46,7 +46,7 @@ fn qty_literals_replace_three_tokens_for_three() {
     s.patch_input("n", None, None, 400.0).unwrap();
     s.recalc().unwrap();
     assert_eq!(s.get("payout", None, Some(0)).unwrap(), 100.0);
-    let fresh = fml::run(s.source()).unwrap();
+    let fresh = openfml::run(s.source()).unwrap();
     let series: std::collections::HashMap<String, Vec<f64>> = fresh.series.iter().cloned().collect();
     assert_eq!(series["payout"][0], 100.0);
 }
@@ -60,7 +60,7 @@ fn the_session_source_is_always_the_cst_reprint() {
     s.patch_input("expenses", Some("Marketing"), Some(0), 431.5).unwrap();
     s.patch_input("headcount", Some("Engineering"), None, 51.0).unwrap();
     s.recalc().unwrap();
-    let reparsed = fml::cst::parse_cst(s.source()).unwrap();
+    let reparsed = openfml::cst::parse_cst(s.source()).unwrap();
     assert_eq!(reparsed.text(), s.source());
     assert!(s.source().contains("2026: 431.5"));
     assert!(s.source().contains("Engineering -> 51"));

@@ -1,22 +1,22 @@
 [package]
-name = "fml"
+name = "openfml"
 version = "0.1.0"
 edition = "2021"
 description = "A corporate finance modelling language — Phase 1: parser, unit/type checker, reference evaluator"
 
 [lib]
-name = "fml"
+name = "openfml"
 path = "src/lib.rs"
 crate-type = ["cdylib", "rlib"]
 
 [[bin]]
-name = "fml"
+name = "openfml"
 path = "src/main.rs"
 
 [[bin]]
-name = "fml-server"
+name = "openfml-server"
 path = "src/bin/fml_server.rs"
 
 [[bin]]
-name = "fml-lsp"
+name = "openfml-lsp"
 path = "src/bin/fml_lsp.rs"

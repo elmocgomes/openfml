@@ -67,7 +67,7 @@ input spend : EUR flow over y = { 2026: 100, 2027: 110 }\ntotal : EUR flow over 
     .unwrap();
 
     let mint = |user: &str| -> String {
-        let out = Command::new(env!("CARGO_BIN_EXE_fml-server"))
+        let out = Command::new(env!("CARGO_BIN_EXE_openfml-server"))
             .args(["token", user, dir.join("server.secret").to_str().unwrap()])
             .output()
             .unwrap();
@@ -78,7 +78,7 @@ input spend : EUR flow over y = { 2026: 100, 2027: 110 }\ntotal : EUR flow over 
     let carol = mint("carol");
     let dave = mint("dave");
 
-    let child = Command::new(env!("CARGO_BIN_EXE_fml-server"))
+    let child = Command::new(env!("CARGO_BIN_EXE_openfml-server"))
         .args([dir.to_str().unwrap(), &port.to_string()])
         .stderr(std::process::Stdio::null())
         .spawn()

@@ -1,7 +1,7 @@
 //! Phase 2: incremental recalculation — dirty propagation with early cutoff
 //! over the (measure × member × period) micro-graph.
 
-use fml::Session;
+use openfml::Session;
 
 const FINPLAN: &str = include_str!("fixtures/finplan.fml");
 

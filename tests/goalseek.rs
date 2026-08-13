@@ -1,7 +1,7 @@
 //! Goal-seek — the IFPS classic: which input value makes an output hit a
 //! target? Safeguarded secant over runtime values, fully restored.
 
-use fml::Session;
+use openfml::Session;
 
 const ROLLING: &str = include_str!("fixtures/rolling.fml");
 
@@ -32,7 +32,7 @@ fn linear_goal_is_exact_and_fast() {
         ("team_engineering.fml", include_str!("fixtures/team_engineering.fml")),
         ("team_operations.fml", include_str!("fixtures/team_operations.fml")),
     ];
-    let exp = fml::expand_includes_with_map(
+    let exp = openfml::expand_includes_with_map(
         "team_budget.fml",
         include_str!("fixtures/team_budget.fml"),
         &mut |p| {

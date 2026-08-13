@@ -8,7 +8,7 @@ use std::collections::HashMap;
 fn solar_pf_matches_reference_implementation() {
     let path = format!("{}/tests/fixtures/solar_pf.fml", env!("CARGO_MANIFEST_DIR"));
     let src = std::fs::read_to_string(&path).expect("read solar_pf.fml");
-    let result = fml::run(&src).expect("compile + evaluate solar_pf");
+    let result = openfml::run(&src).expect("compile + evaluate solar_pf");
 
     let scalars: HashMap<String, f64> = result.scalars.iter().cloned().collect();
     let series: HashMap<String, Vec<f64>> = result.series.iter().cloned().collect();
@@ -103,7 +103,7 @@ solve broken {
 }
 "#;
     // s cuts the cycle here, so this converges — sanity check the mechanism.
-    let r = fml::run(src).expect("tearing solve runs");
+    let r = openfml::run(src).expect("tearing solve runs");
     let scalars: HashMap<String, f64> = r.scalars.iter().cloned().collect();
     // a = b*2 = s/2; s = sum(a) = 2*(s/2) = s → any fixed point; with init 0
     // it stays at 0. Just check it converged and is finite.

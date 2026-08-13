@@ -2,7 +2,7 @@
 //! the repo: `reprint(parse_cst(text)) == text`, byte for byte — comments,
 //! whitespace, `1_700` spellings, include directives, everything.
 
-use fml::cst::{decl_name, parse_cst, GreenChild, Red, SyntaxKind};
+use openfml::cst::{decl_name, parse_cst, GreenChild, Red, SyntaxKind};
 
 const MODELS: &[(&str, &str)] = &[
     ("finplan", include_str!("fixtures/finplan.fml")),
@@ -25,7 +25,7 @@ fn reprint_theorem_over_every_model() {
         ("team_engineering.fml", include_str!("fixtures/team_engineering.fml")),
         ("team_operations.fml", include_str!("fixtures/team_operations.fml")),
     ];
-    let flat = fml::expand_includes(include_str!("fixtures/team_budget.fml"), &mut |p| {
+    let flat = openfml::expand_includes(include_str!("fixtures/team_budget.fml"), &mut |p| {
         files
             .iter()
             .find(|(n, _)| *n == p)
@@ -126,7 +126,7 @@ fn structural_edits_are_byte_predictable_and_share_structure() {
         .into_iter()
         .enumerate()
         .find_map(|(i, c)| match c {
-            fml::cst::RedChild::Node(n) if n.green.kind == SyntaxKind::ScenarioDecl => {
+            openfml::cst::RedChild::Node(n) if n.green.kind == SyntaxKind::ScenarioDecl => {
                 Some((i, n.range()))
             }
             _ => None,

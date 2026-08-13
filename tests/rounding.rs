@@ -3,7 +3,7 @@
 //! minor unit, and rounded allocations conserve the pot EXACTLY in
 //! minor-unit space — the cent-level promise, tested in integer cents.
 
-use fml::Session;
+use openfml::Session;
 
 const HEAD: &str = "model demo.round\ncalendar plan = yearly 2026 .. 2026\ncurrency EUR\n";
 
@@ -143,7 +143,7 @@ fn rounding_inside_a_solve_is_a_compile_error() {
     let src = "model demo.badsolve\ncalendar plan = yearly 2026 .. 2027\ncurrency EUR\n\
         input g : rate = 5%\n\
         solve fix {\n  x : EUR flow over plan round 2 = y * 0.5 + 10\n  y : EUR flow over plan = x * g\n}\n";
-    let err = fml::compile(src).unwrap_err();
+    let err = openfml::compile(src).unwrap_err();
     assert!(err.contains("solve") && err.contains("round"), "err: {err}");
 }
 
@@ -158,7 +158,7 @@ fn round_trip_theorem_holds_for_rounded_models() {
     s.run_full().unwrap();
     s.patch_input("pot", None, None, 100.01).unwrap();
     s.recalc().unwrap();
-    let fresh = fml::run(s.source()).unwrap();
+    let fresh = openfml::run(s.source()).unwrap();
     for m in ["A", "B", "C"] {
         let inc = s.get("share", Some(m), Some(0)).unwrap();
         let f = fresh

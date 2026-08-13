@@ -2,7 +2,7 @@
 //! in proportion to a driver, with conservation proven by the
 //! auto-generated tie-assert.
 
-use fml::Session;
+use openfml::Session;
 
 const HEAD: &str = "model demo.alloc\n\
 calendar plan = yearly 2026 .. 2027\n\
@@ -106,10 +106,10 @@ fn explain_shows_the_allocation_basis() {
 fn misuse_is_a_compile_error() {
     // No dimension in the over clause.
     let bad1 = format!("{HEAD}input pot : kEUR flow over plan = 1\nallocate s : kEUR flow over plan = pot by 1\n");
-    let e1 = fml::compile(&bad1).unwrap_err();
+    let e1 = openfml::compile(&bad1).unwrap_err();
     assert!(e1.contains("exactly one dimension"), "err: {e1}");
     // Missing `by`.
     let bad2 = format!("{HEAD}input pot : kEUR flow over plan = 1\nallocate s : kEUR flow over CC, plan = pot\n");
-    let e2 = fml::compile(&bad2).unwrap_err();
+    let e2 = openfml::compile(&bad2).unwrap_err();
     assert!(e2.contains("by"), "err: {e2}");
 }

@@ -35,7 +35,7 @@ assert alpha_eu : revenue[Alpha][EU] == price[Alpha] * 5 * (1 + growth) ± 0.000
 
 #[test]
 fn broadcasting_and_aggregation() {
-    let r = fml::run(MODEL).expect("multidim model runs");
+    let r = openfml::run(MODEL).expect("multidim model runs");
     let series: HashMap<String, Vec<f64>> = r.series.iter().cloned().collect();
 
     // 2026: Alpha: EU 50, US 70; Beta: EU 220, US 220 → total 560
@@ -66,7 +66,7 @@ currency EUR
 input x : EUR flow over Product, plan = 1
 y : EUR flow over plan = x
 "#;
-    let err = fml::compile(bad).expect_err("expected unbound-dimension error");
+    let err = openfml::compile(bad).expect_err("expected unbound-dimension error");
     assert!(err.contains("sum[Product]") || err.contains("unbound"), "unexpected: {err}");
 }
 
@@ -82,6 +82,6 @@ functional Entity = { A: kEUR, B: kUSD }
 x : local flow over Entity, m = match Entity { A -> 1, B -> 2 }
 y : kEUR flow over m = sum[Entity](x)
 "#;
-    let err = fml::compile(bad).expect_err("expected cross-currency sum error");
+    let err = openfml::compile(bad).expect_err("expected cross-currency sum error");
     assert!(err.contains("translate"), "unexpected: {err}");
 }

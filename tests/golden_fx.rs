@@ -8,7 +8,7 @@ use std::collections::HashMap;
 fn fx_consolidation_matches_reference_implementation() {
     let path = format!("{}/tests/fixtures/fx_consol.fml", env!("CARGO_MANIFEST_DIR"));
     let src = std::fs::read_to_string(&path).expect("read fx_consol.fml");
-    let result = fml::run(&src).expect("compile + evaluate fx_consol");
+    let result = openfml::run(&src).expect("compile + evaluate fx_consol");
 
     let series: HashMap<String, Vec<f64>> = result.series.iter().cloned().collect();
     let scalars: HashMap<String, f64> = result.scalars.iter().cloned().collect();
@@ -81,7 +81,7 @@ unit kUSD
 functional Entity = { A: kEUR, B: kUSD }
 x : local flow over Entity, m = 5 kEUR
 "#;
-    let err = fml::compile(src).expect_err("expected a member unit error");
+    let err = openfml::compile(src).expect_err("expected a member unit error");
     assert!(err.contains("member B") || err.contains("kUSD"), "unexpected error: {err}");
 }
 
@@ -97,6 +97,6 @@ functional Entity = { A: kEUR, B: kUSD }
 x : local flow over Entity, m = match Entity { A -> 1, B -> 2 }
 y : kEUR flow over m = x[Group]
 "#;
-    let err = fml::compile(src).expect_err("expected a group aggregation error");
+    let err = openfml::compile(src).expect_err("expected a group aggregation error");
     assert!(err.contains("translate"), "unexpected error: {err}");
 }

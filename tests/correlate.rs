@@ -4,13 +4,13 @@
 //! The assertions are structural: N(0,1) sums/differences have known
 //! percentile widths, so the copula is verified through the model.
 
-fn sim(src: &str, trials: usize) -> fml::live::SimResult {
-    let mut s = fml::Session::new(src).unwrap();
+fn sim(src: &str, trials: usize) -> openfml::live::SimResult {
+    let mut s = openfml::Session::new(src).unwrap();
     s.run_full().unwrap();
     s.simulate(trials).unwrap()
 }
 
-fn band(r: &fml::live::SimResult, name: &str, t: usize) -> [f64; 3] {
+fn band(r: &openfml::live::SimResult, name: &str, t: usize) -> [f64; 3] {
     r.cells.iter().find(|(n, _, _)| n == name).unwrap().2[t]
 }
 
@@ -111,8 +111,8 @@ fn correlated_simulation_is_deterministic() {
 fn deterministic_base_is_unchanged_by_correlate() {
     let plain = format!("{HEAD}input x : 1 ~ normal(3, 1)\ninput y : 1 ~ normal(4, 1)\ns : 1 = x + y\n");
     let corr = format!("{HEAD}input x : 1 ~ normal(3, 1)\ninput y : 1 ~ normal(4, 1)\ncorrelate x, y = 0.8\ns : 1 = x + y\n");
-    let (a, b) = (fml::run(&plain).unwrap(), fml::run(&corr).unwrap());
-    let get = |r: &fml::EvalResult| r.scalars.iter().find(|(n, _)| n == "s").unwrap().1;
+    let (a, b) = (openfml::run(&plain).unwrap(), openfml::run(&corr).unwrap());
+    let get = |r: &openfml::EvalResult| r.scalars.iter().find(|(n, _)| n == "s").unwrap().1;
     assert_eq!(get(&a), 7.0);
     assert_eq!(get(&a), get(&b));
 }
@@ -135,7 +135,7 @@ fn correlate_errors_are_compile_time() {
         ),
     ];
     for (src, want) in &bad {
-        let err = fml::compile(src).expect_err(&format!("must fail: {want}"));
+        let err = openfml::compile(src).expect_err(&format!("must fail: {want}"));
         assert!(err.contains(want), "error {err:?} lacks {want:?}");
     }
 }

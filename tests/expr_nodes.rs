@@ -2,8 +2,8 @@
 //! nodes nested inside declarations, and the first formula-level
 //! operation — replacing a measure's formula from the tree.
 
-use fml::cst::{decl_name, parse_cst, Red, RedChild, SyntaxKind};
-use fml::Session;
+use openfml::cst::{decl_name, parse_cst, Red, RedChild, SyntaxKind};
+use openfml::Session;
 
 fn find_decl<'a>(root: &Red<'a>, name: &str) -> Red<'a> {
     root.decls()
@@ -95,7 +95,7 @@ fn formula_edits_route_to_the_owning_file() {
         ("team_engineering.fml", include_str!("fixtures/team_engineering.fml")),
         ("team_operations.fml", include_str!("fixtures/team_operations.fml")),
     ];
-    let exp = fml::expand_includes_with_map(
+    let exp = openfml::expand_includes_with_map(
         "team_budget.fml",
         include_str!("fixtures/team_budget.fml"),
         &mut |p| {

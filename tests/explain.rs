@@ -2,7 +2,7 @@
 //! cells fed a value, where the definition lives (routed to the owning
 //! file through the include source map).
 
-use fml::Session;
+use openfml::Session;
 use std::collections::HashMap;
 
 const ROLLING: &str = include_str!("fixtures/rolling.fml");
@@ -84,7 +84,7 @@ fn multi_file_definitions_locate_their_owning_file() {
         ("team_engineering.fml", include_str!("fixtures/team_engineering.fml").to_string()),
         ("team_operations.fml", include_str!("fixtures/team_operations.fml").to_string()),
     ]);
-    let exp = fml::expand_includes_with_map(
+    let exp = openfml::expand_includes_with_map(
         "team_budget.fml",
         include_str!("fixtures/team_budget.fml"),
         &mut |p| files.get(p).cloned().ok_or_else(|| format!("missing {p}")),

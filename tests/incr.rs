@@ -4,7 +4,7 @@
 //! semantic edits rebuild and name the declarations that forced it.
 //! The governing theorem: reload ≡ fresh compile, always.
 
-use fml::{Expanded, Segment, Session, SourceFile};
+use openfml::{Expanded, Segment, Session, SourceFile};
 
 fn single(src: &str) -> Expanded {
     Expanded {
@@ -37,7 +37,7 @@ fn trivia_edits_reuse_the_analysis_and_runtime() {
     s.recalc().unwrap();
     assert!(s.source().contains("2026: 425"), "{}", s.source());
     assert!(s.source().contains("// reviewed by the CFO"), "comment survives the patch");
-    let fresh = fml::run(s.source()).unwrap();
+    let fresh = openfml::run(s.source()).unwrap();
     let series: std::collections::HashMap<String, Vec<f64>> = fresh.series.iter().cloned().collect();
     assert_eq!(series["headroom"][0], s.get("headroom", None, Some(0)).unwrap());
     // Explain sees the SHIFTED line numbers.
@@ -93,7 +93,7 @@ fn multi_file_trivia_reuse_and_cross_file_move_guard() {
     let ops = include_str!("fixtures/team_operations.fml");
     let build = |mk: &str, eng: &str, ops: &str| -> Expanded {
         let files = [("team_marketing.fml", mk), ("team_engineering.fml", eng), ("team_operations.fml", ops)];
-        fml::expand_includes_with_map(
+        openfml::expand_includes_with_map(
             "team_budget.fml",
             include_str!("fixtures/team_budget.fml"),
             &mut |p| {

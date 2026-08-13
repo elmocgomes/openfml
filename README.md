@@ -1,4 +1,10 @@
-# fml — a corporate finance modelling language
+# OpenFML — a corporate finance modelling language
+
+> **Naming**: the language is **OpenFML** (formerly the working name *fml* —
+> which collides with WebFOCUS's Financial Modeling Language and IEEE 1855's
+> Fuzzy Markup Language). Model files keep the **`.fml`** extension, and the
+> engine's C-ABI keeps its historical `fml_*` prefix; the crate and binaries
+> are `openfml`, `openfml-server`, `openfml-lsp`.
 
 Phase 1 implementation: lexer → parser → unit/type checker → reference
 evaluator, with the golden-model suite as CI. Design documents live in
@@ -8,8 +14,8 @@ evaluator, with the golden-model suite as CI. Design documents live in
 
 ```bash
 cargo test                          # golden suite + negative tests
-cargo run -- check models/finplan.fml
-cargo run -- eval  models/finplan.fml
+cargo run -- check models/acme/industrial_budget.fml
+cargo run -- eval  models/acme/industrial_budget.fml
 ```
 
 ## What works (Phase-1 subset)
@@ -31,7 +37,7 @@ cargo run -- eval  models/finplan.fml
   cycles anywhere else are compile errors naming the cycle.
 - **`assert`** with `± tol`, evaluated every period, reported with max
   deviation.
-- **CLI**: `fml check` (symbol table with inferred units) and `fml eval`
+- **CLI**: `openfml check` (symbol table with inferred units) and `openfml eval`
   (value table, solve convergence stats, assert results; non-zero exit on
   assert failure — CI-ready).
 
@@ -89,7 +95,7 @@ The scheduler generalizes to the (measure × member × period) micro-graph.
   `www/`.
 - **The budget portal** (`www/app.html`) — the enterprise front end for
   budget contributors and administrators (dashboard, entry grid,
-  workflow, audit, admin); pure HTTP client of `fml-server`, no wasm.
+  workflow, audit, admin); pure HTTP client of `openfml-server`, no wasm.
   Described under slice 15 below.
 - **The workbench** (`www/index.html`) — the bi-representational surface
   from design doc 07: an editable **source pane** and an editable **grid
@@ -172,7 +178,7 @@ The scheduler generalizes to the (measure × member × period) micro-graph.
   `team_marketing.fml` only (draft-dot on exactly that tab), included
   files are fetched on demand, per-file drafts survive reload, and source
   edits in any tab recompile the whole model.
-- **The collaboration server** (`fml-server`, zero-dependency HTTP) —
+- **The collaboration server** (`openfml-server`, zero-dependency HTTP) —
   design doc 07 §3 v1: every mutation passes ONE gate — authorize →
   apply → log. **Dimension-subspace write ACLs** from a plain owners file
   (`alice: expenses[Marketing]`, `cfo: *`); an **append-only, attributed
@@ -471,7 +477,7 @@ The scheduler generalizes to the (measure × member × period) micro-graph.
   asserts, solves) rebuild fully (`tests/queries.rs`). Analysis itself
   (unit inference, scheduling) is still whole-model — the remaining
   deepening, paired with the LSP that would consume it.
-- **The LSP (slice 9)** — `fml-lsp`, a zero-dependency Language Server
+- **The LSP (slice 9)** — `openfml-lsp`, a zero-dependency Language Server
   over stdio (hand-rolled JSON-RPC framing + a ~250-line JSON module),
   serving straight from the Session the whole arc built:
   **diagnostics** on open/change (resilient parse errors with exact
@@ -485,7 +491,7 @@ The scheduler generalizes to the (measure × member × period) micro-graph.
   speaks LSP to it: initialize → open (clean) → hover (values inline) →
   definition (into the include) → symbols → break (error surfaces) →
   fix (diagnostics clear) → shutdown (`tests/lsp.rs`). Wire it to any
-  editor as a generic LSP for `.fml`: command `fml-lsp`, stdio
+  editor as a generic LSP for `.fml`: command `openfml-lsp`, stdio
   transport, no arguments.
 - **The IDE editor (slice 10)** — the workbench's source pane grew up:
   a zero-dependency code editor built as a highlight overlay (a
@@ -580,7 +586,7 @@ The scheduler generalizes to the (measure × member × period) micro-graph.
   header/measure column; a **workflow board** of department cards with
   submit/reopen/lock controls; the **audit timeline** and the **admin
   console** (people & roles, one-click token minting, checkpoint) as
-  first-class pages. It speaks only HTTP to `fml-server` — no wasm —
+  first-class pages. It speaks only HTTP to `openfml-server` — no wasm —
   so a contributor's browser never even loads the compiler. The grid
   enforces nothing itself; every cell's editability is derived from the
   server's structural edit-sites, the department grants, and the round

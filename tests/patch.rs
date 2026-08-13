@@ -2,7 +2,7 @@
 //! The round-trip theorem: patching the source and recalculating
 //! incrementally must equal compiling the patched source from scratch.
 
-use fml::Session;
+use openfml::Session;
 
 const FINPLAN: &str = include_str!("fixtures/finplan.fml");
 
@@ -74,7 +74,7 @@ fn broadcast_literal_patch_changes_all_periods() {
     s.patch_input("g", None, Some(0), 0.18).unwrap();
     s.recalc().unwrap();
     assert!(s.source().contains("2026: 18%"));
-    let fresh = fml::run(s.source()).expect("patched source still compiles");
+    let fresh = openfml::run(s.source()).expect("patched source still compiles");
     assert!(fresh.asserts.iter().all(|a| a.passed));
 }
 

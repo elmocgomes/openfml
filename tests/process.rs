@@ -2,11 +2,11 @@
 //! extended gate, and process state folded from the signed event log —
 //! submit / reopen / lock are as tamper-evident as the numbers.
 
-use fml::server::{
+use openfml::server::{
     apply_event, gate, replay_signed, sign_line, Access, Action, Directory, Event, Process, Role,
     GENESIS,
 };
-use fml::Session;
+use openfml::Session;
 
 const USERS: &str = "\
 # user: department role

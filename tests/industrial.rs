@@ -4,14 +4,14 @@
 
 use std::collections::HashMap;
 
-fn session() -> fml::Session {
+fn session() -> openfml::Session {
     let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("models/acme");
     let raw = std::fs::read_to_string(base.join("industrial_budget.fml")).unwrap();
-    let exp = fml::expand_includes_with_map("industrial_budget.fml", &raw, &mut |p| {
+    let exp = openfml::expand_includes_with_map("industrial_budget.fml", &raw, &mut |p| {
         std::fs::read_to_string(base.join(p)).map_err(|e| format!("{p}: {e}"))
     })
     .unwrap();
-    let mut s = fml::Session::new_expanded_resolve(exp, &mut |f: &str| {
+    let mut s = openfml::Session::new_expanded_resolve(exp, &mut |f: &str| {
         std::fs::read_to_string(base.join(f)).map_err(|e| e.to_string())
     })
     .unwrap();

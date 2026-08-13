@@ -7,7 +7,7 @@ fn main() -> ExitCode {
     let (cmd, path) = match (args.get(1).map(|s| s.as_str()), args.get(2)) {
         (Some(c @ ("check" | "eval")), Some(p)) => (c, p.clone()),
         _ => {
-            eprintln!("usage: fml <check|eval> <model.fml>");
+            eprintln!("usage: openfml <check|eval> <model.fml>");
             return ExitCode::from(2);
         }
     };
@@ -23,7 +23,7 @@ fn main() -> ExitCode {
         .parent()
         .map(|p| p.to_path_buf())
         .unwrap_or_default();
-    let src = match fml::expand_includes(&src, &mut |rel| {
+    let src = match openfml::expand_includes(&src, &mut |rel| {
         std::fs::read_to_string(base.join(rel))
             .map_err(|e| format!("cannot read include \"{rel}\": {e}"))
     }) {
@@ -37,9 +37,9 @@ fn main() -> ExitCode {
     // Parse, bind the fact plane (data files resolve beside the model),
     // then check — the CLI equivalent of compile() with a live resolver.
     let checked = match (|| -> Result<_, String> {
-        let mut model = fml::Parser::parse(&src)?;
-        fml::expand_defs(&mut model)?;
-        fml::bind_data(
+        let mut model = openfml::Parser::parse(&src)?;
+        openfml::expand_defs(&mut model)?;
+        openfml::bind_data(
             &mut model,
             &mut |f| {
                 std::fs::read_to_string(base.join(f))
@@ -47,7 +47,7 @@ fn main() -> ExitCode {
             },
             &mut Vec::new(),
         )?;
-        fml::check(&model)
+        openfml::check(&model)
     })() {
         Ok(c) => c,
         Err(e) => {
@@ -85,16 +85,16 @@ fn main() -> ExitCode {
                 "scalar".to_string()
             };
             let unit_str = match &m.munit {
-                fml::check::MUnit::Uniform(u) => u.to_string(),
-                fml::check::MUnit::Local => "local".to_string(),
+                openfml::check::MUnit::Uniform(u) => u.to_string(),
+                openfml::check::MUnit::Local => "local".to_string(),
             };
             println!(
                 "{:<16} {:>12} {:>7} {:>18} {}",
                 m.name,
                 unit_str,
                 match m.kind {
-                    Some(fml::ast::Kind::Stock) => "stock",
-                    Some(fml::ast::Kind::Flow) => "flow",
+                    Some(openfml::ast::Kind::Stock) => "stock",
+                    Some(openfml::ast::Kind::Flow) => "flow",
                     None => "-",
                 },
                 range,
@@ -104,7 +104,7 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
-    let result = match fml::evaluate(&checked) {
+    let result = match openfml::evaluate(&checked) {
         Ok(r) => r,
         Err(e) => {
             eprintln!("error: {e}");

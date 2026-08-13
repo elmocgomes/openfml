@@ -2,7 +2,7 @@
 //! over stdio — initialize, open a multi-file model, hover, definition
 //! into the include, symbols, break-and-fix diagnostics.
 
-use fml::json::{parse, J};
+use openfml::json::{parse, J};
 use std::io::{Read, Write};
 use std::process::{Child, Command, Stdio};
 
@@ -13,7 +13,7 @@ struct Lsp {
 
 impl Lsp {
     fn start() -> Lsp {
-        let child = Command::new(env!("CARGO_BIN_EXE_fml-lsp"))
+        let child = Command::new(env!("CARGO_BIN_EXE_openfml-lsp"))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .spawn()

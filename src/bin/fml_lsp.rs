@@ -9,8 +9,8 @@
 //! Wire it to any editor as a generic LSP for `.fml` files:
 //!   command: fml-lsp     (no arguments, stdio transport)
 
-use fml::json::{parse, J};
-use fml::{Expanded, Session};
+use openfml::json::{parse, J};
+use openfml::{Expanded, Session};
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -243,7 +243,7 @@ fn open_or_change(docs: &mut HashMap<String, Doc>, uri: &str, text: String) {
     let name = uri_to_path(uri)
         .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
         .unwrap_or_else(|| "model.fml".into());
-    let exp = fml::expand_includes_with_map(&name, &text, &mut |rel| {
+    let exp = openfml::expand_includes_with_map(&name, &text, &mut |rel| {
         let base = dir.clone().unwrap_or_default();
         std::fs::read_to_string(base.join(rel)).map_err(|e| format!("include {rel}: {e}"))
     });
@@ -255,14 +255,14 @@ fn open_or_change(docs: &mut HashMap<String, Doc>, uri: &str, text: String) {
             Err(_) => {
                 // Salvage view: per-declaration errors + dropped dependents.
                 let mut ds = Vec::new();
-                match fml::parse_salvage(&exp.flat) {
+                match openfml::parse_salvage(&exp.flat) {
                     Ok(sal) => {
                         for e in &sal.errors {
                             ds.push(diag(&text, &e.msg, e.line));
                         }
                         if sal.errors.is_empty() {
                             // Parse fine → check-level error; extract line.
-                            if let Err(ce) = fml::compile(&exp.flat) {
+                            if let Err(ce) = openfml::compile(&exp.flat) {
                                 let line = ce
                                     .strip_prefix("line ")
                                     .and_then(|r| r.split(':').next())

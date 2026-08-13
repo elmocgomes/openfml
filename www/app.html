@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>fml · budget portal</title>
+<title>OpenFML · Budget Portal</title>
 <style>
   :root {
     --navy: #16283f; --navy2: #1e3554; --navy3: #27436a;
@@ -183,7 +183,7 @@
 </div>
 
 <aside id="side" style="display:none">
-  <div class="logo">Budget Portal<small>powered by fml</small></div>
+  <div class="logo">Budget Portal<small>powered by OpenFML</small></div>
   <select id="modelSel"></select>
   <nav>
     <a data-p="dash" class="on"><span class="ic">◧</span>Dashboard</a>
@@ -593,7 +593,7 @@ document.addEventListener("click", e => {
   if (pop && !e.target.closest("#fmtPop") && !e.target.closest("#fmtBtn")) pop.style.display = "none";
 });
 
-const ENTRY_LEGEND = `<span class="ht">cell entry codes</span><span class="hk">MIS-Alea style</span>
+const ENTRY_LEGEND = `<span class="ht">cell entry codes</span><span class="hk">planning-grid style</span>
   <div class="hx" style="margin-top:.4rem;font-family:'SF Mono',ui-monospace,monospace;font-size:.74rem;background:#fafbfd;border:1px solid var(--line);border-radius:6px;padding:.35rem .55rem;white-space:pre-wrap">12k · 1.5m      thousands / millions
 (500)           negative, accounting style
 +500  -500      add / subtract from today's value

@@ -12,7 +12,7 @@ input a : kEUR = 12
 b : EUR over plan = a in EUR             // 12 kEUR -> 12_000 EUR
 c : kEUR over plan = 500_000 EUR in kEUR // -> 500 kEUR
 "#;
-    let r = fml::run(src).expect("scaled model runs");
+    let r = openfml::run(src).expect("scaled model runs");
     let series: std::collections::HashMap<String, Vec<f64>> = r.series.iter().cloned().collect();
     assert!((series["b"][0] - 12_000.0).abs() < 1e-9, "b = {}", series["b"][0]);
     assert!((series["c"][0] - 500.0).abs() < 1e-9, "c = {}", series["c"][0]);
@@ -27,7 +27,7 @@ input a : kEUR = 12
 input b : EUR = 5
 c = a + b
 "#;
-    let err = fml::compile(bad).expect_err("expected scale mismatch");
+    let err = openfml::compile(bad).expect_err("expected scale mismatch");
     assert!(err.contains("cannot add"), "unexpected error: {err}");
 }
 
@@ -41,7 +41,7 @@ input a : EUR flow over plan = 100
 input b : EUR flow over plan = 100
 eliminate pair over plan : a against b
 "#;
-    let r = fml::run(src).expect("eliminate model runs");
+    let r = openfml::run(src).expect("eliminate model runs");
     assert_eq!(r.asserts.len(), 1);
     assert_eq!(r.asserts[0].name, "eliminate_pair");
     assert!(r.asserts[0].passed);

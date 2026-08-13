@@ -2,9 +2,9 @@
 //! the standard test vectors, bearer tokens, and the hash chain that
 //! makes modified history fail replay.
 
-use fml::crypto::{hex, hmac_sha256, sha256};
-use fml::server::{make_token, replay_signed, sign_line, verify_token, Acl, Event, Process, GENESIS};
-use fml::Session;
+use openfml::crypto::{hex, hmac_sha256, sha256};
+use openfml::server::{make_token, replay_signed, sign_line, verify_token, Acl, Event, Process, GENESIS};
+use openfml::Session;
 
 #[test]
 fn sha256_matches_the_standard_vectors() {

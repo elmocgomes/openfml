@@ -3,7 +3,7 @@
 //! literal-editable — they change by re-import), pin by content hash,
 //! and re-import equals a fresh compile (the equivalence theorem).
 
-use fml::{Expanded, Segment, Session, SourceFile};
+use openfml::{Expanded, Segment, Session, SourceFile};
 
 const MODEL: &str = "model demo.facts
 calendar q = quarterly 2026-Q1 .. 2026-Q4
@@ -80,17 +80,17 @@ fn facts_are_structurally_not_literal_editable() {
     let err = s.patch_input("volume", Some("A"), Some(0), 999.0).unwrap_err();
     assert!(err.contains("not literal-editable"), "{err}");
     // …and the model view says why: the measure is data-bound.
-    let info = fml::json::parse(&s.model_info_json()).unwrap();
+    let info = openfml::json::parse(&s.model_info_json()).unwrap();
     let vol = match info.get("measures").unwrap() {
-        fml::json::J::A(ms) => ms
+        openfml::json::J::A(ms) => ms
             .iter()
-            .find(|m| matches!(m.get("name"), Some(fml::json::J::S(n)) if n == "volume"))
+            .find(|m| matches!(m.get("name"), Some(openfml::json::J::S(n)) if n == "volume"))
             .unwrap()
             .clone(),
         _ => panic!(),
     };
-    assert_eq!(vol.get("data"), Some(&fml::json::J::S("volumes.csv".into())));
-    assert_eq!(vol.get("editable"), Some(&fml::json::J::B(false)));
+    assert_eq!(vol.get("data"), Some(&openfml::json::J::S("volumes.csv".into())));
+    assert_eq!(vol.get("editable"), Some(&openfml::json::J::B(false)));
 }
 
 #[test]
@@ -101,7 +101,7 @@ fn a_missing_file_names_itself_for_the_host_retry_loop() {
 
 #[test]
 fn the_sha256_pin_guards_reproducibility() {
-    let good = fml::crypto::hex(&fml::crypto::sha256(PRICES.as_bytes()));
+    let good = openfml::crypto::hex(&openfml::crypto::sha256(PRICES.as_bytes()));
     let pinned = MODEL.replace(
         "data \"prices.csv\"",
         &format!("data \"prices.csv\" sha256 \"{good}\""),

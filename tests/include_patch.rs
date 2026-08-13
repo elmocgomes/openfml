@@ -20,18 +20,18 @@ fn resolver(p: &str) -> Result<String, String> {
     files.get(p).map(|s| s.to_string()).ok_or_else(|| format!("missing {p}"))
 }
 
-fn build() -> fml::Session {
-    let exp = fml::expand_includes_with_map("main.fml", MAIN, &mut resolver).unwrap();
-    let mut s = fml::Session::new_expanded(exp).unwrap();
+fn build() -> openfml::Session {
+    let exp = openfml::expand_includes_with_map("main.fml", MAIN, &mut resolver).unwrap();
+    let mut s = openfml::Session::new_expanded(exp).unwrap();
     s.run_full().unwrap();
     s
 }
 
 /// Re-expand the session's CURRENT files and assert flat-source equality,
 /// then compile fresh and assert value equality — the round-trip theorem.
-fn assert_round_trip(s: &mut fml::Session) {
-    let files: Vec<fml::SourceFile> = s.files().to_vec();
-    let re = fml::expand_includes(&files[0].text, &mut |p| {
+fn assert_round_trip(s: &mut openfml::Session) {
+    let files: Vec<openfml::SourceFile> = s.files().to_vec();
+    let re = openfml::expand_includes(&files[0].text, &mut |p| {
         files
             .iter()
             .find(|f| f.name == p)
@@ -40,7 +40,7 @@ fn assert_round_trip(s: &mut fml::Session) {
     })
     .unwrap();
     assert_eq!(re, s.source(), "flat source must equal re-expansion of the patched files");
-    let fresh = fml::run(&re).unwrap();
+    let fresh = openfml::run(&re).unwrap();
     let series: HashMap<String, Vec<f64>> = fresh.series.iter().cloned().collect();
     for t in 0..2 {
         assert_eq!(
@@ -104,7 +104,7 @@ fn second_patch_in_shifted_file_stays_exact() {
 fn single_file_sessions_still_patch() {
     // Session::new is now a one-file, one-segment special case of the map.
     let src = "model demo.single\ncalendar plan = yearly 2026 .. 2027\ncurrency kEUR\ninput x : kEUR flow over plan = 5\ny : kEUR flow over plan = x * 2\n";
-    let mut s = fml::Session::new(src).unwrap();
+    let mut s = openfml::Session::new(src).unwrap();
     s.run_full().unwrap();
     s.patch_input("x", None, None, 8.0).unwrap();
     s.recalc().unwrap();

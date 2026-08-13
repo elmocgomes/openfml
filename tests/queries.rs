@@ -4,7 +4,7 @@
 //! transitive dependents, copying every other value from the old session.
 //! Theorem, as ever: incremental ≡ from-scratch.
 
-use fml::{Expanded, Segment, Session, SourceFile};
+use openfml::{Expanded, Segment, Session, SourceFile};
 
 fn single(src: &str) -> Expanded {
     Expanded {

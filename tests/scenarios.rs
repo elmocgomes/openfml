@@ -2,7 +2,7 @@
 //! from Base. Round-trip theorem: a scenario's values must equal a fresh
 //! compile of the model with the overrides written in directly.
 
-use fml::Session;
+use openfml::Session;
 
 const FINPLAN: &str = include_str!("fixtures/finplan.fml");
 
@@ -64,10 +64,10 @@ fn scenario_chaining_applies_parent_first() {
 #[test]
 fn scenario_validation_rejects_computed_targets() {
     let bad = with_scenarios("scenario X from Base { ebit = 5 }\n");
-    let err = fml::compile(&bad).expect_err("computed override must fail");
+    let err = openfml::compile(&bad).expect_err("computed override must fail");
     assert!(err.contains("computed"), "unexpected: {err}");
 
     let bad_unit = with_scenarios("scenario Y from Base { pfd_div = 3 share }\n");
-    let err2 = fml::compile(&bad_unit).expect_err("unit mismatch must fail");
+    let err2 = openfml::compile(&bad_unit).expect_err("unit mismatch must fail");
     assert!(err2.contains("unit") || err2.contains("USD"), "unexpected: {err2}");
 }

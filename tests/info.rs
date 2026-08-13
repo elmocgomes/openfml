@@ -3,8 +3,8 @@
 //! reference graph (refs + dependents, symmetric), dims with roll-up
 //! groups, asserts with their referenced measures.
 
-use fml::json::{parse, J};
-use fml::Session;
+use openfml::json::{parse, J};
+use openfml::Session;
 
 fn arr<'a>(j: &'a J, key: &str) -> &'a Vec<J> {
     match j.get(key) {
@@ -65,7 +65,7 @@ fn the_reference_graph_is_exact_and_symmetric() {
 #[test]
 fn the_include_hierarchy_names_children_and_owns_decls() {
     let master = include_str!("fixtures/team_budget.fml");
-    let exp = fml::expand_includes_with_map("team_budget.fml", master, &mut |p: &str| {
+    let exp = openfml::expand_includes_with_map("team_budget.fml", master, &mut |p: &str| {
         std::fs::read_to_string(format!("tests/fixtures/{p}")).map_err(|e| e.to_string())
     })
     .unwrap();

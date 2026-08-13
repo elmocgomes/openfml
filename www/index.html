@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>fml workbench</title>
+<title>OpenFML Studio</title>
 <style>
   /* Shared design language with the budget portal (app.html). */
   :root {
@@ -352,7 +352,7 @@
 </head>
 <body>
 <aside id="side">
-  <div class="logo">Workbench<small>powered by fml</small></div>
+  <div class="logo">OpenFML<small>modelling studio</small></div>
   <select id="modelSel" title="Model"></select>
   <nav>
     <a data-p="overview" class="on"><span class="ic">◧</span>Overview</a>
@@ -800,7 +800,7 @@ function commitCell(inp, dir) {
   syncPatchResult(result, (performance.now() - t0) * 1000,
     entries.length > 1 ? `spread ${entries.length} cells (grid→text)` : "grid→text patch + recalc");
 }
-const ENTRY_LEGEND = `<span class="ht">cell entry codes</span><span class="hk">MIS-Alea style</span>
+const ENTRY_LEGEND = `<span class="ht">cell entry codes</span><span class="hk">planning-grid style</span>
   <div class="hx" style="margin-top:.4rem">12k · 1.5m      thousands / millions
 (500)           negative, accounting style
 +500  -500      add / subtract from today's value
@@ -1708,7 +1708,7 @@ if (SERVER && !TOKEN) {
   // ---- landing: ask for the access token ----
   const div = document.createElement("div");
   div.id = "landing";
-  div.innerHTML = `<div class="card"><h2>fml budget server</h2>
+  div.innerHTML = `<div class="card"><h2>OpenFML budget server</h2>
     <p>Paste your access token (ask your finance admin — they can mint one for you).</p>
     <input id="tokIn" placeholder="you.a1b2c3…" autofocus>
     <button id="tokGo">connect</button></div>`;
@@ -1723,7 +1723,7 @@ if (SERVER && !TOKEN) {
 }
 if (SERVER) {
   // ---- connected client: the budget process, server-evaluated ----
-  document.title = `fml · ${USER}`;
+  document.title = `OpenFML · ${USER}`;
   // Local-only controls: simulation/structural edits/saving need the wasm
   // session; connected sessions work through the server instead.
   for (const id of ["addPeriodBtn", "addMemberBtn", "saveBtn"]) {
@@ -2171,13 +2171,13 @@ function showTornado(title, bars, us) {
 }
 
 const { instance } = await WebAssembly.instantiate(
-  await (await fetch("fml.wasm?v=" + Date.now())).arrayBuffer(), {});
+  await (await fetch("openfml.wasm?v=" + Date.now())).arrayBuffer(), {});
 exports = instance.exports;
 
 async function switchModel(name) {
   current = name;
   document.getElementById("modelSel").value = name;
-  document.title = `fml · ${name}`;
+  document.title = `OpenFML · ${name}`;
   fileTexts = {};
   diskTexts = {};
   activeFile = mainFile();

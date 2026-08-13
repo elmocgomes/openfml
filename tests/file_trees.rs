@@ -3,7 +3,7 @@
 //! demand — no positional state is maintained anywhere. The lockstep
 //! invariant: expand(file texts) == flat source, always.
 
-use fml::Session;
+use openfml::Session;
 
 fn team_session() -> Session {
     let files = [
@@ -11,7 +11,7 @@ fn team_session() -> Session {
         ("team_engineering.fml", include_str!("fixtures/team_engineering.fml")),
         ("team_operations.fml", include_str!("fixtures/team_operations.fml")),
     ];
-    let exp = fml::expand_includes_with_map(
+    let exp = openfml::expand_includes_with_map(
         "team_budget.fml",
         include_str!("fixtures/team_budget.fml"),
         &mut |p| {
@@ -30,7 +30,7 @@ fn team_session() -> Session {
 
 fn assert_lockstep(s: &Session) {
     let files: Vec<_> = s.files().to_vec();
-    let re = fml::expand_includes(&files[0].text, &mut |p| {
+    let re = openfml::expand_includes(&files[0].text, &mut |p| {
         files
             .iter()
             .find(|f| f.name == p)
@@ -58,7 +58,7 @@ fn lockstep_invariant_survives_patch_sequences() {
         assert_lockstep(&s);
     }
     // And the round-trip theorem still closes the loop.
-    let fresh = fml::run(s.source()).unwrap();
+    let fresh = openfml::run(s.source()).unwrap();
     let series: std::collections::HashMap<String, Vec<f64>> = fresh.series.iter().cloned().collect();
     assert_eq!(series["total_expenses"][0], s.get("total_expenses", None, Some(0)).unwrap());
 }

@@ -1,13 +1,13 @@
 //! The actuals switchover (`actuals X until closed else E`) and the
 //! tornado sensitivity ranking.
 
-use fml::Session;
+use openfml::Session;
 
 const ROLLING: &str = include_str!("fixtures/rolling.fml");
 
 #[test]
 fn switchover_blends_actuals_and_forecast() {
-    let r = fml::run(ROLLING).expect("rolling model runs");
+    let r = openfml::run(ROLLING).expect("rolling model runs");
     let s: std::collections::HashMap<String, Vec<f64>> = r.series.iter().cloned().collect();
     // Closed months read the actuals verbatim.
     assert_eq!(s["sales"][0], 100.0);
@@ -23,7 +23,7 @@ fn advancing_the_close_reblends() {
     let advanced = ROLLING
         .replace("period closed = 2026-01 .. 2026-06", "period closed = 2026-01 .. 2026-07")
         .replace("2026-06: 118 }", "2026-06: 118, 2026-07: 125 }");
-    let r = fml::run(&advanced).expect("advanced model runs");
+    let r = openfml::run(&advanced).expect("advanced model runs");
     let s: std::collections::HashMap<String, Vec<f64>> = r.series.iter().cloned().collect();
     assert_eq!(s["sales"][6], 125.0); // July now an actual, not 121.54 forecast
     assert!((s["sales"][7] - 125.0 * 1.03).abs() < 1e-9); // August grows off it

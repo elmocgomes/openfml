@@ -4,7 +4,7 @@
 //! bit for bit. Definition-site unit soundness is checked with skolem
 //! units; recursion is rejected; unknown calls name what IS in scope.
 
-use fml::Session;
+use openfml::Session;
 
 const BASE: &str = "model demo.defs
 calendar y = yearly 2026 .. 2029
@@ -113,20 +113,20 @@ fn provenance_reaches_through_defs() {
     // arguments, not on an opaque function node.
     let mut s = Session::new(BASE).unwrap();
     s.run_full().unwrap();
-    let info = fml::json::parse(&s.model_info_json()).unwrap();
+    let info = openfml::json::parse(&s.model_info_json()).unwrap();
     let value = match info.get("measures").unwrap() {
-        fml::json::J::A(ms) => ms
+        openfml::json::J::A(ms) => ms
             .iter()
-            .find(|m| matches!(m.get("name"), Some(fml::json::J::S(n)) if n == "value"))
+            .find(|m| matches!(m.get("name"), Some(openfml::json::J::S(n)) if n == "value"))
             .unwrap()
             .clone(),
         _ => panic!(),
     };
     let refs: Vec<String> = match value.get("refs").unwrap() {
-        fml::json::J::A(v) => v
+        openfml::json::J::A(v) => v
             .iter()
             .map(|x| match x {
-                fml::json::J::S(s) => s.clone(),
+                openfml::json::J::S(s) => s.clone(),
                 _ => panic!(),
             })
             .collect(),

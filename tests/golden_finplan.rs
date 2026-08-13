@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 
-fn series(result: &fml::EvalResult) -> HashMap<String, Vec<f64>> {
+fn series(result: &openfml::EvalResult) -> HashMap<String, Vec<f64>> {
     result.series.iter().cloned().collect()
 }
 
@@ -12,7 +12,7 @@ fn series(result: &fml::EvalResult) -> HashMap<String, Vec<f64>> {
 fn finplan_matches_reference_implementation() {
     let path = format!("{}/tests/fixtures/finplan.fml", env!("CARGO_MANIFEST_DIR"));
     let src = std::fs::read_to_string(&path).expect("read finplan.fml");
-    let result = fml::run(&src).expect("compile + evaluate finplan");
+    let result = openfml::run(&src).expect("compile + evaluate finplan");
 
     assert_eq!(result.period_labels, vec!["2026", "2027", "2028", "2029"]);
     let s = series(&result);
@@ -82,7 +82,7 @@ input a : USD over plan = 100
 input b : share over plan = 10
 c = a + b
 "#;
-    let err = fml::compile(src).expect_err("expected a unit error");
+    let err = openfml::compile(src).expect_err("expected a unit error");
     assert!(err.contains("cannot add"), "unexpected error: {err}");
 }
 
@@ -95,7 +95,7 @@ currency USD
 a : USD over plan = b + 1
 b : USD over plan = a * 2
 "#;
-    let err = fml::compile(src).expect_err("expected a cycle error");
+    let err = openfml::compile(src).expect_err("expected a cycle error");
     assert!(err.contains("solve"), "unexpected error: {err}");
 }
 
@@ -107,6 +107,6 @@ calendar plan = yearly 2026 .. 2027
 currency USD
 a : USD over plan = prev(a) * 2
 "#;
-    let err = fml::compile(src).expect_err("expected an init error");
+    let err = openfml::compile(src).expect_err("expected an init error");
     assert!(err.contains("init"), "unexpected error: {err}");
 }

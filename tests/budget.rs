@@ -1,7 +1,7 @@
 //! Cost-center budget template: per-member editable map arms, member-aware
 //! grid→text write-back, and rollup covenants.
 
-use fml::Session;
+use openfml::Session;
 
 const BUDGET: &str = include_str!("fixtures/budget.fml");
 
@@ -49,7 +49,7 @@ fn broadcast_arm_patch_changes_all_periods_of_that_member() {
 
 #[test]
 fn envelope_covenant_and_scenario() {
-    let r = fml::run(BUDGET).expect("budget model runs");
+    let r = openfml::run(BUDGET).expect("budget model runs");
     for a in &r.asserts {
         assert!(a.passed, "assert '{}' failed", a.name);
     }

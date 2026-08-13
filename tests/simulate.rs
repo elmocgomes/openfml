@@ -1,8 +1,8 @@
 //! The `simulate` leg: distribution inputs, deterministic-by-default at the
 //! median, reproducible Monte Carlo with percentile bands.
 
-use fml::check::Dist;
-use fml::Session;
+use openfml::check::Dist;
+use openfml::Session;
 
 const ROLLING: &str = include_str!("fixtures/rolling.fml");
 
@@ -22,7 +22,7 @@ fn metalog_fits_its_quantiles_exactly() {
 fn deterministic_default_is_the_median() {
     // The rolling model's growth is now ~ metalog{1%,3%,6%}: base evaluation
     // must equal the old deterministic 3% model exactly.
-    let r = fml::run(ROLLING).expect("model runs");
+    let r = openfml::run(ROLLING).expect("model runs");
     let s: std::collections::HashMap<String, Vec<f64>> = r.series.iter().cloned().collect();
     assert!((s["sales"][6] - 118.0 * 1.03).abs() < 1e-9);
 }

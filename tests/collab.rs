@@ -1,7 +1,7 @@
 //! Collaboration primitives: subspace ACLs and the event-sourced log.
 
-use fml::server::{Process, apply_event, replay, Acl, Event};
-use fml::Session;
+use openfml::server::{Process, apply_event, replay, Acl, Event};
+use openfml::Session;
 
 const BUDGET: &str = include_str!("fixtures/budget.fml");
 
