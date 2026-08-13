@@ -361,6 +361,7 @@ function pageEntry() {
         ? `<button class="act" id="submitBtn">Submit ${esc(ME.dept)}'s numbers</button>` : ""}
       <span class="legend">editable<span class="sw" style="background:var(--amber)"></span>
         computed<span class="sw" style="background:#fff"></span></span>
+      <span class="legend" id="entryHelp" style="cursor:help;border:1px solid var(--line);border-radius:999px;padding:.15rem .6rem">⌨ entry codes</span>
     </div>
     <div class="gridwrap"><table class="grid">
       <thead><tr><th>Measure</th>${s.periods.map(p => `<th>${esc(p)}</th>`).join("")}</tr></thead>
@@ -370,31 +371,159 @@ function pageEntry() {
     if (!r.ok) { toast(r.error, true); return; }
     PROC = r.process; toast(`${ME.dept} submitted — finance can now review`); await refresh(); renderPage();
   });
+  const cellSel = (k, mb, t) =>
+    `td.in[data-key="${CSS.escape(k)}"][data-member="${CSS.escape(mb || "")}"]` + (t !== undefined ? `[data-t="${t}"]` : "");
+  const cellCur = td => {
+    const raw = td.textContent.replace(/[(),]/g, m => m === "(" ? "-" : "");
+    return raw === "·" || raw.trim() === "" ? 0 : Number(raw);
+  };
+  const neighbor = (td, dir) => {
+    if (!dir) return null;
+    if (dir === "right" || dir === "left") {
+      const row = [...document.querySelectorAll(cellSel(td.dataset.key, td.dataset.member))]
+        .sort((a, b) => Number(a.dataset.t) - Number(b.dataset.t));
+      const i = row.findIndex(x => x === td);
+      return row[i + (dir === "right" ? 1 : -1)] || null;
+    }
+    const col = [...document.querySelectorAll(`td.in[data-t="${td.dataset.t}"]`)];
+    return col[col.findIndex(x => x === td) + 1] || null;
+  };
   document.querySelectorAll("td.in").forEach(td => td.addEventListener("click", () => {
     if (td.querySelector("input")) return;
-    const old = td.textContent.replace(/[(),]/g, m => m === "(" ? "-" : "");
-    td.innerHTML = `<input value="${old === "·" ? "" : old}">`;
+    const cur = cellCur(td);
+    td.innerHTML = `<input value="${cur || cur === 0 ? cur : ""}">`;
     const inp = td.querySelector("input");
     inp.focus(); inp.select();
     let done = false; // Enter commits, then the re-render blurs the input — fire once.
-    const commit = async () => {
+    const commit = async dir => {
       if (done) return;
       done = true;
-      const v = Number(inp.value);
-      if (!Number.isFinite(v) || inp.value.trim() === "") { renderPage(); return; }
-      if (v === Number(old)) { renderPage(); return; }
-      const r = await post("/patch", { name: td.dataset.key, member: td.dataset.member, period: td.dataset.t, value: String(v) });
-      if (!r.ok) { toast(r.error, true); renderPage(); return; }
-      await refresh(); renderPage(); toast(`saved · commit #${r.seq}`);
+      const raw = inp.value;
+      const move = neighbor(td, dir);
+      const moveTo = move ? { k: move.dataset.key, mb: move.dataset.member, t: move.dataset.t } : null;
+      const parsed = parseEntry(raw, cur);
+      if (parsed === null) {
+        if (raw.trim() !== "") toast(`didn't understand "${raw}" — hover ⌨ entry codes`, true);
+        renderPage(); reopen(moveTo); return;
+      }
+      // rightward targets: this row's editable cells from here on
+      const cells = [...document.querySelectorAll(cellSel(td.dataset.key, td.dataset.member))]
+        .filter(x => Number(x.dataset.t) >= Number(td.dataset.t))
+        .sort((a, b) => Number(a.dataset.t) - Number(b.dataset.t));
+      let entries;
+      switch (parsed.op) {
+        case "set": entries = [[Number(td.dataset.t), parsed.v]]; break;
+        case "repeat": entries = cells.map(c => [Number(c.dataset.t), parsed.v]); break;
+        case "even": entries = cells.map(c => [Number(c.dataset.t), parsed.v / cells.length]); break;
+        case "prop": {
+          const total = cells.reduce((a, c) => a + cellCur(c), 0);
+          entries = Math.abs(total) < 1e-12
+            ? cells.map(c => [Number(c.dataset.t), parsed.v / cells.length])
+            : cells.map(c => [Number(c.dataset.t), parsed.v * cellCur(c) / total]);
+          break;
+        }
+        case "grow": {
+          const t0 = Number(td.dataset.t);
+          entries = cells.slice(1).map(c =>
+            [Number(c.dataset.t), cur * Math.pow(1 + parsed.pct, Number(c.dataset.t) - t0)]);
+          break;
+        }
+      }
+      entries = (entries || []).filter(([t, v]) => {
+        const c = document.querySelector(cellSel(td.dataset.key, td.dataset.member, t));
+        return !c || Math.abs(v - cellCur(c)) > 1e-12;
+      });
+      if (!entries.length) { renderPage(); reopen(moveTo); return; }
+      let last = null;
+      for (const [t, v] of entries) {
+        const r = await post("/patch", { name: td.dataset.key, member: td.dataset.member,
+          period: String(t), value: String(v) });
+        if (!r.ok) { toast(r.error, true); renderPage(); return; }
+        last = r;
+      }
+      await refresh(); renderPage();
+      toast(entries.length > 1
+        ? `spread across ${entries.length} periods · commit #${last.seq}`
+        : `saved · commit #${last.seq}`);
+      reopen(moveTo);
     };
     inp.addEventListener("keydown", e => {
-      if (e.key === "Enter") commit();
-      if (e.key === "Escape") { done = true; renderPage(); }
+      if (e.key === "Enter") { e.preventDefault(); commit("down"); }
+      else if (e.key === "Tab") { e.preventDefault(); commit(e.shiftKey ? "left" : "right"); }
+      else if (e.key === "Escape") { done = true; renderPage(); }
     });
-    inp.addEventListener("blur", commit);
+    inp.addEventListener("blur", () => commit(null));
   }));
+  function reopen(moveTo) {
+    if (!moveTo) return;
+    document.querySelector(cellSel(moveTo.k, moveTo.mb, moveTo.t))?.click();
+  }
+  $("entryHelp")?.addEventListener("mouseover", e => showTipAt(e.clientX, e.clientY, ENTRY_LEGEND));
+  $("entryHelp")?.addEventListener("mouseleave", hideTip);
 }
 
+function parseEntry(raw, cur) {
+  raw = String(raw).trim();
+  if (!raw) return null;
+  cur = Number.isFinite(cur) ? cur : 0;
+  const num = s => {
+    const m = /^([+-]?[0-9][0-9_,]*\.?[0-9]*)\s*([kmb])?$/i.exec(String(s).trim());
+    if (!m) return null;
+    let v = parseFloat(m[1].replace(/[,_]/g, ""));
+    if (m[2]) v *= { k: 1e3, m: 1e6, b: 1e9 }[m[2].toLowerCase()];
+    return Number.isFinite(v) ? v : null;
+  };
+  let m;
+  if ((m = /^\((.+)\)$/.exec(raw))) {                      // (500) — accounting negative
+    const v = num(m[1]);
+    return v === null ? null : { op: "set", v: -v };
+  }
+  if ((m = /^([+-])(.+)%$/.exec(raw))) {                     // +10% / -10% — grow/shrink
+    const p = parseFloat(m[2]);
+    return isNaN(p) ? null : { op: "set", v: cur * (1 + (m[1] === "+" ? 1 : -1) * p / 100) };
+  }
+  if ((m = /^[*x](.+)$/i.exec(raw))) {                       // *1.1 — multiply
+    const f = parseFloat(m[1]);
+    return isNaN(f) ? null : { op: "set", v: cur * f };
+  }
+  if ((m = /^g\s*([0-9.]+)\s*%?\s*>$/i.exec(raw)))         // g5> — grow rightward
+    return { op: "grow", pct: parseFloat(m[1]) / 100 };
+  if ((m = /^(.*)\/>$/.exec(raw))) {                        // 6k/> — split evenly rightward
+    const v = num(m[1]);
+    return v === null ? null : { op: "even", v };
+  }
+  if ((m = /^(.*)%>$/.exec(raw))) {                          // 6k%> — proportional rightward
+    const v = num(m[1]);
+    return v === null ? null : { op: "prop", v };
+  }
+  if ((m = /^(.*)>$/.exec(raw))) {                           // 500> or > — repeat rightward
+    const s = m[1].trim();
+    const v = s === "" ? cur : num(s);
+    return v === null ? null : { op: "repeat", v };
+  }
+  if ((m = /^([+-])(.+)$/.exec(raw))) {                      // +500 / -500 — add/subtract
+    const v = num(m[2]);
+    return v === null ? null : { op: "set", v: cur + (m[1] === "+" ? 1 : -1) * v };
+  }
+  if (raw.endsWith("%")) {                                   // 10% — a rate
+    const p = parseFloat(raw);
+    return isNaN(p) ? null : { op: "set", v: p / 100 };
+  }
+  const v = num(raw);
+  return v === null ? null : { op: "set", v };
+}
+const ENTRY_LEGEND = `<span class="ht">cell entry codes</span><span class="hk">MIS-Alea style</span>
+  <div class="hx" style="margin-top:.4rem;font-family:'SF Mono',ui-monospace,monospace;font-size:.74rem;background:#fafbfd;border:1px solid var(--line);border-radius:6px;padding:.35rem .55rem;white-space:pre-wrap">12k · 1.5m      thousands / millions
+(500)           negative, accounting style
++500  -500      add / subtract from today's value
++10%  -10%      grow / shrink by percent
+*1.1            multiply
+10%             enter a rate (0.10)
+500&gt;            repeat rightward   (bare &gt; repeats current)
+6k/&gt;            split 6k evenly, this period onward
+6k%&gt;            spread 6k in proportion to current values
+g5&gt;             grow 5% per period from this cell
+Enter ↓ · Tab → commit and move</div>`;
 let TRACE_INFO = null, traceOpen = new Set(), traceRoot = null;
 const DOCS = {
   model:     ["declaration", "Names the model. Every file starts with one.", "model acme.industrial_budget"],
