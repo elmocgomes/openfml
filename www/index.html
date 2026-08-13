@@ -284,6 +284,20 @@
   #mdetail b.nm { font-family:var(--mono); font-size:.9rem; }
   #mdetail a { color:var(--pri); text-decoration:none; }
 
+  /* ---- editor hover documentation ---- */
+  #hovertip { position:fixed; z-index:40; max-width:380px; background:var(--card);
+    border:1px solid var(--line); border-radius:10px; padding:.55rem .75rem;
+    box-shadow:0 10px 34px rgba(16,30,54,.24); font-size:.8rem; display:none;
+    pointer-events:none; line-height:1.5; }
+  #hovertip .ht { font-family:var(--mono); font-weight:700; font-size:.84rem; color:var(--navy2); }
+  #hovertip .hk { display:inline-block; margin-left:.4rem; background:var(--pri2); color:var(--pri);
+    border-radius:999px; padding:.02rem .5rem; font-size:.68rem; font-weight:700; }
+  #hovertip .hd { color:#333c4b; margin-top:.15rem; }
+  #hovertip .hx { font-family:var(--mono); font-size:.74rem; color:var(--mut);
+    background:#fafbfd; border:1px solid var(--line); border-radius:6px;
+    padding:.25rem .45rem; margin-top:.35rem; white-space:pre-wrap; }
+  #hovertip .hv { font-family:var(--mono); font-variant-numeric:tabular-nums; font-weight:700; }
+
   /* ---- inspector & tornado cards ---- */
   #inspect, #tornado { position:fixed; right:1rem; bottom:3rem; background:var(--card);
     border:1px solid var(--line); border-radius:12px; padding:.8rem 1rem;
@@ -391,6 +405,7 @@
     </div>
     <div class="page" id="pageTeam"><div class="twrap2" id="teamPane"></div></div>
   </div>
+  <div id="hovertip"></div>
   <div id="foot">
     <span><span class="lbl">scalars</span><span id="scalars"></span></span>
     <span id="hint">click a cell to explain · click a name to inspect/rename · Ctrl+Space completes</span>
@@ -845,6 +860,7 @@ async function loadModel(what) {
       renderTabs();
       render(r);
       renderHl();
+      fetchModelInfo(); // refresh the hover/trace cache
       return;
     }
     const miss = /(?:include|data file) "([^"]+)" is not loaded/.exec(r.error || "");
@@ -876,6 +892,7 @@ async function refreshFromServer(us, what) {
   if (window.refreshProcFromState) window.refreshProcFromState(r);
   stats(r, us || 0, what || "server state");
   render(r);
+  fetchModelInfo(); // refresh the hover/trace cache
   const m = await (await fetch(SERVER + "/model" + window.clientQs())).json();
   const box = document.getElementById("src");
   if (m.src !== box.value) { const top = box.scrollTop; box.value = m.src; box.scrollTop = top; if (typeof renderHl === "function") renderHl(); }
@@ -886,14 +903,18 @@ const escM = t => String(t).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace
 const fileDisp = f => !SERVER && (f === "main" || f === "model") ? mainFile() : f;
 let modelInfoReq = 0;
 async function fetchModelInfo() {
+  let info = null;
   if (SERVER) {
     if (!window.clientQs) return null; // client boot not finished yet
-    try { return await (await fetch(SERVER + "/info" + window.clientQs())).json(); }
+    try { info = await (await fetch(SERVER + "/info" + window.clientQs())).json(); }
     catch { return null; }
+  } else {
+    if (!exports || !loadedOk) return null;
+    if (exports.fml_model_info() !== 0) return null;
+    info = readResult();
   }
-  if (!exports || !loadedOk) return null;
-  if (exports.fml_model_info() !== 0) return null;
-  return readResult();
+  if (info && info.ok) window.__lastInfo = info; // feeds the editor hover card
+  return info;
 }
 function dagSvg(info) {
   const M = info.measures, byName = {};
@@ -1103,6 +1124,146 @@ async function renderModel() {
     setPage("files");
   }));
 }
+
+
+// ---- hover documentation: fml commands explained in finance terms ------
+const DOCS = {
+  model:     ["declaration", "Names the model. Every file starts with one.", "model acme.industrial_budget"],
+  calendar:  ["declaration", "The timeline every series runs on — yearly, quarterly or monthly.", "calendar q = quarterly 2026-Q1 .. 2026-Q4"],
+  period:    ["declaration", "Names a sub-range of the calendar — e.g. the closed (actualized) months.", "period closed = 2026-Q1 .. 2026-Q2"],
+  dimension: ["declaration", "A named breakdown — product lines, cost centers, entities. 'tree' adds a roll-up group that always equals the sum of its members.", "dimension Line = tree { AllLines -> { Pipes, Valves, Fittings } }"],
+  currency:  ["declaration", "The model's home currency. Amounts in different currencies never add silently.", "currency kEUR"],
+  unit:      ["declaration", "Declares measurement units (tonnes, headcount, MWh). Every formula is checked against them — kEUR/t times t gives kEUR, never a silent mismatch.", "unit t, hc, mwh\nunit kEUR = 1000 EUR"],
+  input:     ["declaration", "A number someone asserts: a plan, a driver, a price. Inputs are editable in the grid (grants permitting); everything else is computed.", "input volume : t flow over Line, q = { 2026-Q1: 11_500, … }"],
+  data:      ["fact plane", "Loads an input from an external table (CSV) — for FACTS like actuals or market prices. Read-only everywhere; changes only by re-import. Optional sha256 pin locks the exact file contents.", "input energy_price : kEUR/mwh flow over q = data \"energy_prices.csv\""],
+  include:   ["structure", "Pulls another file into the model — each department owns its file; grid edits write back to the owner.", "include \"sales_plan.fml\""],
+  def:       ["library", "A reusable, typed calculation — the language's extension mechanism. $C is a unit variable (kEUR in → kEUR out, checked). Calls expand into ordinary formulas, so explain/simulate/goal-seek see straight through.", "def dcf(cash : $C flow, rate : rate, horizon : range) -> $C =\n  npv(rate, cash over horizon)"],
+  solve:     ["declaration", "Declares a circular block (interest ↔ debt ↔ balance) solved as a fixpoint each period.", "solve balance { debt = …  interest = debt * i }"],
+  assert:    ["declaration", "A covenant or sanity check, verified every period. Failing checks turn red in the header.", "assert margin_floor over q : ebitda >= total_revenue * 12%"],
+  scenario:  ["declaration", "A named what-if: override inputs, everything downstream recomputes. Base stays untouched.", "scenario Downturn from Base { price = price * 95% }"],
+  correlate: ["risk", "Ties two uncertain inputs together in simulation (rank correlation via a Gaussian copula).", "correlate margin, growth = 0.7"],
+  allocate:  ["declaration", "Splits a pot across a dimension in proportion to a driver — with 'round dp', the pieces re-add to the pot EXACTLY, to the cent.", "allocate overhead_alloc : kEUR flow over Line, q round 2 =\n  plant_overhead by revenue"],
+  eliminate: ["consolidation", "Declares intercompany pairs that must cancel on consolidation (auto-generates tie checks).", "eliminate ic_sales against ic_purchases"],
+  actuals:   ["time", "The switchover: use recorded actuals through the closed range, the forecast formula after it.", "sales = actuals sales_act until closed else prev(sales) * (1 + g)"],
+  until:     ["time", "Part of 'actuals … until <range> else …' — the boundary between recorded and forecast periods."],
+  over:      ["typing", "Declares what a measure ranges over: dimensions and/or the calendar (or a sub-range).", "revenue : kEUR flow over Line, q = volume * price"],
+  init:      ["time", "The starting value for a series that references its own past.", "asset_base : kEUR stock over q init: 12_000 = prev(asset_base) + capex - depreciation"],
+  prev:      ["time", "Last period's value of a measure — the roll-forward operator.", "prev(asset_base)   ·   prev(sales) init 500_000"],
+  when:      ["time", "A value only at the first/last period of a range.", "principal when first(loan_term)"],
+  match:     ["dispatch", "Case analysis — per dimension member (each cost center its own plan) or per period range.", "match Line { Pipes -> 1.1  Valves -> 2.3  Fittings -> 1.3 }"],
+  in:        ["conversion / dispatch", "Inside match t: tests period membership. On values: unit conversion — 'x in USD at fx' (direction follows the units) or scale ('x in EUR')."],
+  at:        ["conversion", "Supplies the rate for a currency conversion: value in USD at eurusd."],
+  sum:       ["aggregation", "Adds up: over a dimension (sum[Line](revenue)), a named range (sum[q](ebitda)), or a window (sum(x[t-3 .. t])).", "fy_ebitda : kEUR = sum[q](ebitda)"],
+  npv:       ["finance", "Present value of a flow over a range at a per-period rate — the discounting workhorse behind dcf().", "npv(discount_q, free_cash over q)"],
+  irr:       ["finance", "The internal rate of return of a measure's flow over a calendar.", "irr(q, project_cash)"],
+  annualize: ["finance", "Scales a per-period rate/flow to a yearly figure."],
+  year:      ["time", "year(t) — the calendar year of the current period, usable in formulas."],
+  min:       ["math", "The smaller of its arguments.", "min(draw_need, facility_cap)"],
+  max:       ["math", "The larger of its arguments.", "max(0, taxable_income)"],
+  metalog:   ["risk", "A flexible distribution fitted from your own P10/P50/P90 view. Deterministic runs use the median; Simulate draws from it.", "input growth : rate ~ metalog { p10: 1%, p50: 4%, p90: 9% }"],
+  uniform:   ["risk", "Equally likely anywhere between two bounds.", "~ uniform(0.10, 0.14)"],
+  normal:    ["risk", "The bell curve: mean and standard deviation.", "~ normal(22%, 2%) per period"],
+  per:       ["risk", "'per period': a fresh independent draw every period (shocks) instead of one draw per trial (parameter uncertainty)."],
+  by:        ["allocation", "The driver in an allocate: split the pot in proportion to this.", "allocate … = plant_overhead by revenue"],
+  round:     ["precision", "Snap stored values to N decimals (posted amounts). In allocate: cent-exact largest-remainder split. Policies: half_up (default), half_even, floor, ceil.", "price_posted : EUR over m round 2 = raw_price"],
+  tolerance: ["solver", "How close a solve block must get before it accepts convergence."],
+  relax:     ["solver", "Tearing form of solve: name the circular variable and its starting guess.", "solve sculpt { relax debt init 1_000 }"],
+  from:      ["scenario", "Scenario inheritance: start from another scenario's overrides.", "scenario Crash from Downturn { … }"],
+  functional:["consolidation", "Marks the dimension whose members carry their own local currencies."],
+  sha256:    ["fact plane", "Pins a data file to its exact content hash — the model refuses changed facts until the pin is updated deliberately."],
+  flow:      ["typing", "A per-period amount (revenue, spend) — sums across periods are meaningful."],
+  stock:     ["typing", "A balance at a point in time (assets, debt) — carried forward, not summed."],
+  rate:      ["typing", "A dimensionless per-period ratio (growth, discount, tax)."],
+  ratio:     ["typing", "A dimensionless proportion."],
+  tree:      ["dimension", "Dimension form with a roll-up group equal to the sum of its members."],
+  list:      ["dimension", "Dimension form without a roll-up member."],
+};
+const hoverTip = document.getElementById("hovertip");
+let hoverTimer = null;
+function hideTip() { hoverTip.style.display = "none"; }
+function showTipAt(x, y, html) {
+  hoverTip.innerHTML = html;
+  hoverTip.style.display = "block";
+  const w = hoverTip.offsetWidth, h = hoverTip.offsetHeight;
+  hoverTip.style.left = Math.min(x + 14, window.innerWidth - w - 10) + "px";
+  hoverTip.style.top = (y + 18 + h > window.innerHeight ? y - h - 10 : y + 18) + "px";
+}
+function measureHoverHtml(name) {
+  const info = window.__lastInfo;
+  const m = info && info.measures && info.measures.find(x => x.name === name);
+  if (!m) return null;
+  const val = fyText(name);
+  const kind = m.input ? (m.data ? "fact" : "input") : m.solve ? "solve member" : "computed";
+  const f = m.data ? `facts from ${m.data}` : (m.formula || "");
+  return `<span class="ht">${escM(name)}</span><span class="hk">${kind}</span>
+    <span class="hk">${escM(m.unit)}</span>
+    ${val ? `<div class="hd">currently <span class="hv">${val.v}</span> <span style="color:var(--mut)">${escM(val.u)}</span></div>` : ""}
+    ${f ? `<div class="hx">= ${escM(f.length > 160 ? f.slice(0, 160) + "…" : f)}</div>` : ""}
+    <div class="hd" style="color:var(--mut);font-size:.72rem">defined in ${escM(fileDisp(m.file))}:${m.line}</div>`;
+}
+function dimHoverHtml(word) {
+  const info = window.__lastInfo;
+  if (!info || !info.dims) return null;
+  const d = info.dims.find(x => x.name === word);
+  if (d) return `<span class="ht">${escM(word)}</span><span class="hk">dimension</span>
+    <div class="hd">${d.group ? `<b>${escM(d.group)}</b> = Σ ⟵ ` : ""}${d.members.map(escM).join(", ")}</div>`;
+  for (const dd of info.dims) {
+    if (dd.members.includes(word)) return `<span class="ht">${escM(word)}</span><span class="hk">member</span>
+      <div class="hd">a member of <b>${escM(dd.name)}</b></div>`;
+    if (dd.group === word) return `<span class="ht">${escM(word)}</span><span class="hk">roll-up</span>
+      <div class="hd">the total of every <b>${escM(dd.name)}</b> member</div>`;
+  }
+  return null;
+}
+function wordDocHtml(word) {
+  const doc = DOCS[word];
+  if (doc) {
+    const [tag, text, ex] = doc;
+    return `<span class="ht">${escM(word)}</span><span class="hk">${escM(tag)}</span>
+      <div class="hd">${escM(text)}</div>${ex ? `<div class="hx">${escM(ex)}</div>` : ""}`;
+  }
+  return measureHoverHtml(word) || dimHoverHtml(word);
+}
+(() => {
+  const src = document.getElementById("src");
+  let charW = 0;
+  const metrics = () => {
+    const probe = document.createElement("span");
+    probe.style.cssText = `position:absolute;visibility:hidden;white-space:pre;font:${getComputedStyle(src).font}`;
+    probe.textContent = "0".repeat(100);
+    document.body.appendChild(probe);
+    charW = probe.getBoundingClientRect().width / 100;
+    probe.remove();
+  };
+  src.addEventListener("mousemove", e => {
+    clearTimeout(hoverTimer);
+    hoverTimer = setTimeout(() => {
+      if (!charW) metrics();
+      const cs = getComputedStyle(src);
+      const rect = src.getBoundingClientRect();
+      const lineH = parseFloat(cs.lineHeight) || 19.5;
+      const x = e.clientX - rect.left - parseFloat(cs.paddingLeft) + src.scrollLeft;
+      const y = e.clientY - rect.top - parseFloat(cs.paddingTop) + src.scrollTop;
+      if (x < -4 || y < 0) { hideTip(); return; }
+      const lines = src.value.split("\n");
+      const ln = Math.floor(y / lineH);
+      if (ln < 0 || ln >= lines.length) { hideTip(); return; }
+      const col = Math.floor(x / charW);
+      const text = lines[ln];
+      if (col < 0 || col >= text.length || !/[A-Za-z0-9_$]/.test(text[col])) { hideTip(); return; }
+      let a = col, b = col;
+      while (a > 0 && /[A-Za-z0-9_$]/.test(text[a - 1])) a--;
+      while (b < text.length && /[A-Za-z0-9_$]/.test(text[b])) b++;
+      const word = text.slice(a, b);
+      if (/^[0-9]/.test(word)) { hideTip(); return; }
+      const html = wordDocHtml(word);
+      if (html) showTipAt(e.clientX, e.clientY, html); else hideTip();
+    }, 110);
+  });
+  src.addEventListener("mouseleave", () => { clearTimeout(hoverTimer); hideTip(); });
+  src.addEventListener("scroll", hideTip);
+  src.addEventListener("keydown", hideTip);
+})();
 
 // ---- checks dropdown ----
 document.getElementById("checksLbl").addEventListener("click", e => {
