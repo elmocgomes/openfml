@@ -210,7 +210,10 @@
 
 <script type="module">
 const P = new URLSearchParams(location.search);
-const SERVER = P.get("server") || "http://localhost:5199";
+// Served by openfml-server itself → same origin; the dev static server
+// (5195) falls back to the conventional API port.
+const SERVER = P.get("server") ||
+  (location.port === "5195" ? "http://localhost:5199" : location.origin);
 let TOKEN = P.get("token") || localStorage.getItem("fml:portal:token") || "";
 let ME = null, MODEL = P.get("model") || "", MODELS = [], STATE = null, PROC = { locked: false, submitted: [] };
 let GRANTS = [], PAGE = "dash", lastSeq = -1;
@@ -246,6 +249,7 @@ async function boot() {
   $("maincol").style.display = "flex";
   $("avatar").textContent = ME.user.slice(0, 2).toUpperCase();
   $("whoNm").textContent = ME.user;
+  if (mi.version) document.querySelector("#side .logo small").textContent = `powered by OpenFML v${mi.version}`;
   $("whoRl").textContent = `${ME.dept} · ${ME.role}`;
   $("navAudit").style.display = ME.role === "admin" ? "" : "none";
   $("navAdmin").style.display = ME.role === "admin" ? "" : "none";

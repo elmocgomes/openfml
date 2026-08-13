@@ -174,6 +174,55 @@ fn process_json(p: &Process) -> String {
     )
 }
 
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+fn respond_bytes(stream: &mut std::net::TcpStream, ctype: &str, body: &[u8]) {
+    let _ = write!(
+        stream,
+        "HTTP/1.1 200 OK\r\nContent-Type: {ctype}\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    let _ = stream.write_all(body);
+}
+
+fn content_type(name: &str) -> &'static str {
+    if name.ends_with(".html") {
+        "text/html; charset=utf-8"
+    } else if name.ends_with(".wasm") {
+        "application/wasm"
+    } else if name.ends_with(".js") {
+        "text/javascript; charset=utf-8"
+    } else if name.ends_with(".css") {
+        "text/css; charset=utf-8"
+    } else {
+        "text/plain; charset=utf-8"
+    }
+}
+
+/// Static assets: the portal (/), the studio (/studio) and their files —
+/// served from <config-dir>/www if present, else ./www. Bare names only
+/// (no traversal); the config dir's models/, logs/ and secret are NEVER
+/// served. This makes one binary the whole deployment: UI + API, one port.
+fn try_static(dir: &Path, path: &str) -> Option<(String, Vec<u8>)> {
+    let name = match path {
+        "/" | "/portal" => "app.html",
+        "/studio" => "index.html",
+        p => p.trim_start_matches('/'),
+    };
+    if name.is_empty() || name.contains("..") || name.contains('/') || name.starts_with('.') {
+        return None;
+    }
+    for base in [dir.join("www"), PathBuf::from("www")] {
+        let p = base.join(name);
+        if p.is_file() {
+            if let Ok(b) = std::fs::read(&p) {
+                return Some((name.to_string(), b));
+            }
+        }
+    }
+    None
+}
+
 fn role_str(r: Role) -> &'static str {
     match r {
         Role::Admin => "admin",
@@ -184,6 +233,10 @@ fn role_str(r: Role) -> &'static str {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    if args.len() == 2 && (args[1] == "--version" || args[1] == "-V") {
+        println!("openfml-server {VERSION}");
+        return;
+    }
     if args.len() >= 3 && args[1] == "token" {
         let path = args.get(3).map(String::as_str).unwrap_or("server.secret");
         let secret = openfml::crypto::load_or_create_secret(Path::new(path)).expect("secret");
@@ -289,6 +342,14 @@ fn main() {
                 .or_else(|| q.get(k).cloned())
         };
 
+        // Static assets first — the UI itself needs no token.
+        if method == "GET" {
+            if let Some((name, bytes)) = try_static(&dir, path) {
+                respond_bytes(&mut stream, content_type(&name), &bytes);
+                continue;
+            }
+        }
+
         // Identity first: every endpoint requires a verified token.
         let Some(user) = get("token").and_then(|t| verify_token(&secret, &t)).and_then(|n| directory.find(&n).cloned())
         else {
@@ -339,7 +400,7 @@ fn main() {
         }
         if method == "GET" && path == "/models" {
             let mut out = format!(
-                "{{\"ok\":true,\"me\":{{\"user\":\"{}\",\"dept\":\"{}\",\"role\":\"{}\"}},\"models\":[",
+                "{{\"ok\":true,\"version\":\"{VERSION}\",\"me\":{{\"user\":\"{}\",\"dept\":\"{}\",\"role\":\"{}\"}},\"models\":[",
                 json_escape(&user.name),
                 json_escape(&user.dept),
                 role_str(user.role)

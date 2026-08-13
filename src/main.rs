@@ -4,6 +4,10 @@ use std::process::ExitCode;
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
+    if args.len() == 2 && (args[1] == "--version" || args[1] == "-V") {
+        println!("openfml {}", env!("CARGO_PKG_VERSION"));
+        return ExitCode::SUCCESS;
+    }
     let (cmd, path) = match (args.get(1).map(|s| s.as_str()), args.get(2)) {
         (Some(c @ ("check" | "eval")), Some(p)) => (c, p.clone()),
         _ => {

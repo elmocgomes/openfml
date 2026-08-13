@@ -1,0 +1,19 @@
+# systemd unit for the OpenFML budget server.
+#   sudo cp openfml-server.service /etc/systemd/system/
+#   sudo systemctl enable --now openfml-server
+# The config directory (/opt/openfml/deploy by default) holds ALL state:
+# users.cfg, access.cfg, models/, logs/ (signed audit chains), and
+# server.secret. Back it up; upgrades never touch it.
+[Unit]
+Description=OpenFML budget server
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/openfml-server /opt/openfml/deploy 8080
+WorkingDirectory=/opt/openfml
+Restart=on-failure
+# Bind stays on localhost by design — put a TLS reverse proxy
+# (nginx/caddy) in front for anything beyond the machine.
+
+[Install]
+WantedBy=multi-user.target

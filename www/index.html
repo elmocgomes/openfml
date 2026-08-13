@@ -441,8 +441,11 @@ let simBands = null;   // name -> bands (per-slot [p10,p50,p90]) when sim mode o
 // ---- client mode: ?server=http://localhost:5199&token=alice.<hmac> ----
 // (mint tokens with:  fml-server token alice)
 const PARAMS = new URLSearchParams(location.search);
-const SERVER = PARAMS.get("server");
 const TOKEN = PARAMS.get("token") || "";
+// A token without ?server= means "this origin" — the studio is being
+// served by openfml-server itself. (Dev static server 5195 → API 5199.)
+const SERVER = PARAMS.get("server") ||
+  (TOKEN ? (location.port === "5195" ? "http://localhost:5199" : location.origin) : null);
 const USER = TOKEN ? TOKEN.split(".")[0] : (PARAMS.get("user") || "anon");
 let myGrants = [];
 function authorized(measure, member) {
@@ -1887,7 +1890,7 @@ if (SERVER) {
   const mi = await (await fetch(SERVER + "/models?token=" + encodeURIComponent(TOKEN))).json();
   if (!mi.ok) { setErr(mi.error || "cannot reach server"); throw new Error("boot failed"); }
   ME = mi.me;
-  whoBox.innerHTML = `<b>${ME.user}</b>${ME.dept} · ${ME.role}`;
+  whoBox.innerHTML = `<b>${ME.user}</b>${ME.dept} · ${ME.role}${mi.version ? " · v" + mi.version : ""}`;
   if (PAGE === "team") window.renderTeamPage();
   const msel0 = document.getElementById("modelSel");
   msel0.innerHTML = "";

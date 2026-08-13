@@ -1,5 +1,7 @@
 /target
 /www/fml.wasm
+/www/openfml.wasm
 events.log
 /tmp
 .DS_Store
+dist/

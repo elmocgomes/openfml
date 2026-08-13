@@ -1,0 +1,62 @@
+model acme.industrial_budget
+// ACME Industrial — 2026 operating budget (finance owns this master).
+// Each department fills its own file; finance owns formulas + process.
+
+calendar q = quarterly 2026-Q1 .. 2026-Q4
+dimension Line = tree { AllLines -> { Pipes, Valves, Fittings } }
+currency kEUR
+unit t, hc, mwh
+
+include "sales_plan.fml"
+include "production_plan.fml"
+include "hr_plan.fml"
+include "maintenance_plan.fml"
+include "finance.fml"
+
+// ---- revenue ------------------------------------------------------------
+revenue : kEUR flow over Line, q = volume * price
+total_revenue : kEUR flow over q = revenue[AllLines]
+
+// ---- direct costs -------------------------------------------------------
+material_cost : kEUR flow over Line, q = volume * material_per_t
+total_material : kEUR flow over q = material_cost[AllLines]
+energy_cost : kEUR flow over q = energy_use * energy_price
+direct_labor : kEUR flow over q = direct_hc * avg_salary_q
+cogs : kEUR flow over q = total_material + energy_cost + direct_labor
+gross_margin : kEUR flow over q = total_revenue - cogs
+
+// ---- plant overhead, allocated to lines by tonnage ----------------------
+allocate overhead_alloc : kEUR flow over Line, q round 2 = plant_overhead by volume
+line_result : kEUR flow over Line, q = revenue - material_cost - overhead_alloc
+
+// ---- personnel ----------------------------------------------------------
+total_hc : hc flow over q = direct_hc + indirect_hc
+admin_cost : kEUR flow over q = indirect_hc * avg_salary_q
+
+// ---- capex & depreciation ----------------------------------------------
+depreciation : kEUR flow over q = prev(asset_base) init 12_000 * 2.5%
+asset_base : kEUR stock over q init: 12_000 = prev(asset_base) + capex - depreciation
+
+// ---- result -------------------------------------------------------------
+ebitda : kEUR flow over q = gross_margin - plant_overhead - maintenance_spend - admin_cost
+ebit : kEUR flow over q = ebitda - depreciation
+fy_ebitda : kEUR = sum[q](ebitda)
+
+// ---- valuation (finance) --------------------------------------------
+// The finance vocabulary comes from finance.fml — defs that EXPAND into
+// the core, so explain/tornado/goal-seek reach through dcf() unchanged.
+input discount_q : rate = 2.2%
+input tv_growth_q : rate = 0.5%
+free_cash : kEUR flow over q = ebitda - capex
+dcf_value : kEUR = dcf(free_cash, discount_q, q)
+terminal_value : kEUR = gordon_tv(free_cash[q.end], discount_q, tv_growth_q)
+
+// ---- covenants ----------------------------------------------------------
+assert margin_floor over q : ebitda >= total_revenue * 12%
+assert capex_cap : sum[q](capex) <= 4_000
+assert headcount_cap over q : total_hc <= 380
+
+scenario Downturn from Base {
+  price = price * 95%
+  energy_price = 0.156
+}

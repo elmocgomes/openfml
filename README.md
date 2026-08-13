@@ -6,6 +6,11 @@
 > engine's C-ABI keeps its historical `fml_*` prefix; the crate and binaries
 > are `openfml`, `openfml-server`, `openfml-lsp`.
 
+**Install & deploy**: see [INSTALL.md](INSTALL.md) — release bundles
+(`scripts/package.sh` + `install.sh`), `cargo install`, or Docker; one
+binary serves the Portal (`/`), the Studio (`/studio`) and the API on one
+port, with all state in the config directory so upgrades are a binary swap.
+
 Phase 1 implementation: lexer → parser → unit/type checker → reference
 evaluator, with the golden-model suite as CI. Design documents live in
 [`../finmodel-lang-research/`](../finmodel-lang-research/) — start with
