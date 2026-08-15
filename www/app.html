@@ -27,6 +27,7 @@
                 text-transform: uppercase; margin-top: .15rem; }
   #side select { margin: .9rem 1rem .4rem; width: calc(100% - 2rem); background: var(--navy2); color: #fff;
                  border: 1px solid var(--navy3); border-radius: 6px; padding: .45rem .5rem; font: inherit; }
+  #side select#verSel { margin-top: 0; font-size: .85rem; padding: .3rem .5rem; color: #ffd9a0; }
   #side nav { margin-top: .6rem; flex: 1; }
   #side nav a { display: flex; align-items: center; gap: .7rem; padding: .55rem 1.2rem; color: #cfd9e6;
                 text-decoration: none; font-size: .92rem; border-left: 3px solid transparent; cursor: pointer; }
@@ -187,6 +188,7 @@
 <aside id="side" style="display:none">
   <div class="logo">Budget Portal<small>powered by OpenFML</small></div>
   <select id="modelSel"></select>
+  <select id="verSel" style="display:none"></select>
   <nav>
     <a data-p="dash" class="on"><span class="ic">◧</span>Dashboard</a>
     <a data-p="entry"><span class="ic">▦</span>Budget entry</a>
@@ -218,12 +220,15 @@ const SERVER = P.get("server") ||
   (location.port === "5195" ? "http://localhost:5199" : location.origin);
 let TOKEN = P.get("token") || localStorage.getItem("fml:portal:token") || "";
 let ME = null, MODEL = P.get("model") || "", MODELS = [], STATE = null, PROC = { locked: false, submitted: [] };
+let VER = P.get("version") || "";
 let GRANTS = [], PAGE = "dash", lastSeq = -1;
 const $ = id => document.getElementById(id);
-const qs = () => `?token=${encodeURIComponent(TOKEN)}&model=${encodeURIComponent(MODEL)}`;
+const qs = () => `?token=${encodeURIComponent(TOKEN)}&model=${encodeURIComponent(MODEL)}`
+  + (VER ? `&version=${encodeURIComponent(VER)}` : "");
 const get = async ep => (await fetch(SERVER + ep)).json();
 const post = (ep, body) => fetch(SERVER + ep, { method: "POST",
-  body: JSON.stringify(Object.assign({ token: TOKEN, model: MODEL }, body || {})) }).then(r => r.json());
+  body: JSON.stringify(Object.assign({ token: TOKEN, model: MODEL },
+    VER ? { version: VER } : {}, body || {})) }).then(r => r.json());
 const nf = new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 });
 const fmt = v => v === null || v === undefined ? "·"
   : v < 0 ? `(${nf.format(-v)})` : nf.format(v);
@@ -257,7 +262,8 @@ async function boot() {
   $("navAdmin").style.display = ME.role === "admin" ? "" : "none";
   const sel = $("modelSel");
   sel.innerHTML = MODELS.map(m => `<option${m.model === MODEL ? " selected" : ""}>${esc(m.model)}</option>`).join("");
-  sel.onchange = async () => { MODEL = sel.value; await refresh(); renderPage(); };
+  sel.onchange = async () => { MODEL = sel.value; VER = ""; await refresh(); await loadVersions(); renderPage(); };
+  await loadVersions();
   document.querySelectorAll("#side nav a").forEach(a => a.onclick = () => {
     document.querySelectorAll("#side nav a").forEach(x => x.classList.toggle("on", x === a));
     PAGE = a.dataset.p; renderPage();
@@ -273,6 +279,34 @@ async function boot() {
     } catch { $("syncdot").textContent = "○ offline"; }
   }, 2000);
 }
+async function loadVersions() {
+  const vsel = $("verSel");
+  let names = [];
+  try {
+    const r = await get("/versions" + qs());
+    if (r.ok) names = r.versions.map(v => v.name);
+  } catch { /* keep hidden */ }
+  vsel.style.display = "";
+  vsel.innerHTML = `<option value="">Budget of record</option>`
+    + names.map(n => `<option value="${esc(n)}"${n === VER ? " selected" : ""}>version · ${esc(n)}</option>`).join("")
+    + (ME.role !== "viewer" ? `<option value="__new">＋ New version…</option>` : "");
+  vsel.onchange = async () => {
+    if (vsel.value === "__new") {
+      const name = (window.prompt("Name the new version (e.g. F3+9):") || "").trim();
+      if (name) {
+        const r = await post("/version", { name });
+        if (!r.ok) { toast(r.error, true); }
+        else { VER = name; toast(`version '${name}' created from the approved baseline`); }
+      }
+      await loadVersions();
+    } else {
+      VER = vsel.value;
+    }
+    await refresh();
+    renderPage();
+  };
+}
+
 function showLogin(msg) {
   $("login").style.display = "flex";
   if (msg) { const p = $("login").querySelector("p"); p.textContent = msg; p.style.color = "var(--bad)"; }
@@ -289,6 +323,7 @@ async function refresh() {
   renderRound();
 }
 function canEdit() {
+  if (VER) return ME.role !== "viewer"; // versions ignore round state
   return !PROC.locked && ME.role !== "viewer" && (ME.role === "admin" || !PROC.submitted.includes(ME.dept));
 }
 function authorized(measure, member) {
@@ -296,6 +331,11 @@ function authorized(measure, member) {
 }
 function renderRound() {
   const pill = $("roundPill");
+  if (VER) {
+    pill.className = "pill submitted";
+    pill.textContent = `working in version · ${VER}`;
+    return;
+  }
   if (PROC.locked) { pill.className = "pill locked"; pill.textContent = "BUDGET LOCKED"; }
   else if (PROC.submitted.includes(ME.dept) && ME.role !== "admin") { pill.className = "pill submitted"; pill.textContent = `${ME.dept} submitted`; }
   else { pill.className = "pill open"; pill.textContent = PROC.submitted.length ? `round open · ${PROC.submitted.length} submitted` : "round open"; }
@@ -927,11 +967,42 @@ async function pageAdmin() {
     <div id="mintOut"></div>
     <p style="color:var(--mut);font-size:.83rem">Roles and departments are declared in
       <code>users.cfg</code> / <code>access.cfg</code>; restart the server after editing.</p>
+    <h2 class="sec">Versions (forecast copies)</h2>
+    <div class="card" id="verCard"><div class="mnote" style="color:var(--mut);font-size:.85rem">
+      A version is an editable copy forked from the approved baseline with its own signed
+      audit log — departments keep filling it while the budget of record is locked.
+      Promote folds its numbers into the primary as ordinary audited patches.</div>
+      <div id="verList" style="margin-top:.6rem">loading…</div></div>
     <h2 class="sec">Round persistence</h2>
     <div class="card"><p style="margin:.2rem 0 .8rem;color:var(--mut);font-size:.88rem">
       Checkpoint writes the approved numbers back into the model files, archives the signed
       audit log, and opens the next round on that baseline. Typically run after locking.</p>
       <button class="act" id="ckBtn">Checkpoint this model</button> <span id="ckOut" style="font-size:.85rem"></span></div>`;
+  (async () => {
+    const r = await get("/versions" + qs());
+    const box = $("verList");
+    if (!r.ok) { box.textContent = r.error; return; }
+    box.innerHTML = (r.versions || []).map(v => `
+      <div class="toolbar" style="margin:.2rem 0">
+        <b>${esc(v.name)}</b><span style="color:var(--mut);font-size:.8rem">${v.seq} change${v.seq === 1 ? "" : "s"}</span>
+        <button class="act ghost vProm" data-v="${esc(v.name)}">Promote to budget of record</button>
+        <button class="act danger vDrop" data-v="${esc(v.name)}">Drop</button></div>`).join("")
+      || `<span style="color:var(--mut);font-size:.85rem">no versions yet — anyone but a viewer can start one from the sidebar</span>`;
+    box.querySelectorAll(".vProm").forEach(b => b.addEventListener("click", async () => {
+      const rr = await post("/promote", { name: b.dataset.v });
+      if (!rr.ok) { toast(rr.error, true); return; }
+      toast(`promoted '${b.dataset.v}' — ${rr.cells} cell${rr.cells === 1 ? "" : "s"} onto the primary · #${rr.seq}`);
+      await refresh(); renderPage();
+    }));
+    box.querySelectorAll(".vDrop").forEach(b => b.addEventListener("click", async () => {
+      if (!window.confirm(`Drop version '${b.dataset.v}'? Its log is archived, not deleted.`)) return;
+      const rr = await post("/version_drop", { name: b.dataset.v });
+      if (!rr.ok) { toast(rr.error, true); return; }
+      if (VER === b.dataset.v) VER = "";
+      toast("version dropped");
+      await loadVersions(); renderPage();
+    }));
+  })();
   document.querySelectorAll(".mint").forEach(b => b.addEventListener("click", async () => {
     const r = await post("/mint", { user: b.dataset.u });
     $("mintOut").innerHTML = r.ok

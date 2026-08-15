@@ -136,12 +136,21 @@ fn query_params(path: &str) -> HashMap<String, String> {
     out
 }
 
-struct ModelState {
+/// One evaluated line of history: a session plus its signed event chain.
+/// The PRIMARY is the budget of record; VERSIONS ("3+9", "Budget V2") are
+/// editable forecast copies forked from the approved baseline files, each
+/// with its own signed log — reproducible as baseline + version log.
+struct VState {
     session: Session,
-    process: Process,
     next_seq: u64,
     chain_tip: String,
     log_path: PathBuf,
+}
+
+struct ModelState {
+    primary: VState,
+    process: Process,
+    versions: HashMap<String, VState>,
 }
 
 fn respond(stream: &mut std::net::TcpStream, code: u16, body: &str) {
@@ -223,6 +232,26 @@ fn try_static(dir: &Path, path: &str) -> Option<(String, Vec<u8>)> {
     None
 }
 
+/// Compile + evaluate a model from the config dir's baseline files.
+fn build_session(dir: &Path, file: &str) -> Session {
+    let mpath = dir.join("models").join(file);
+    let raw = std::fs::read_to_string(&mpath).unwrap_or_else(|e| panic!("read {}: {e}", mpath.display()));
+    let base = dir.join("models");
+    let exp = openfml::expand_includes_with_map(file, &raw, &mut |rel| {
+        std::fs::read_to_string(base.join(rel)).map_err(|e| format!("include {rel}: {e}"))
+    })
+    .expect("expand includes");
+    let mut session = Session::new_expanded_resolve(exp, &mut |f| {
+        if f.contains('/') || f.contains("..") {
+            return Err(format!("data file \"{f}\": path must be a bare file name"));
+        }
+        std::fs::read_to_string(base.join(f)).map_err(|e| format!("data file \"{f}\": {e}"))
+    })
+    .expect("compile model");
+    session.run_full().expect("evaluate model");
+    session
+}
+
 fn role_str(r: Role) -> &'static str {
     match r {
         Role::Admin => "admin",
@@ -261,22 +290,7 @@ fn main() {
     // log — values AND process state both come from the chain.
     let mut states: HashMap<String, ModelState> = HashMap::new();
     for ma in &access.models {
-        let mpath = dir.join("models").join(&ma.file);
-        let raw = std::fs::read_to_string(&mpath).unwrap_or_else(|e| panic!("read {}: {e}", mpath.display()));
-        let base = dir.join("models");
-        let exp = openfml::expand_includes_with_map(&ma.file, &raw, &mut |rel| {
-            std::fs::read_to_string(base.join(rel)).map_err(|e| format!("include {rel}: {e}"))
-        })
-        .expect("expand includes");
-        let mut session = Session::new_expanded_resolve(exp, &mut |f| {
-            if f.contains('/') || f.contains("..") {
-                return Err(format!("data file \"{f}\": path must be a bare file name"));
-            }
-            std::fs::read_to_string(base.join(f))
-                .map_err(|e| format!("data file \"{f}\": {e}"))
-        })
-        .expect("compile model");
-        session.run_full().expect("evaluate model");
+        let mut session = build_session(&dir, &ma.file);
         let mut process = Process::default();
         let log_path = dir.join("logs").join(format!("{}.log", ma.file));
         let (mut next_seq, mut chain_tip) = (1u64, GENESIS.to_string());
@@ -287,7 +301,42 @@ fn main() {
             chain_tip = tip;
             eprintln!("{}: replayed {} events (chain verified)", ma.file, last);
         }
-        states.insert(ma.file.clone(), ModelState { session, process, next_seq, chain_tip, log_path });
+        // Versions float on the CURRENT baseline: <model>@<name>.log
+        // replays over freshly-built baseline files.
+        let mut versions = HashMap::new();
+        if let Ok(entries) = std::fs::read_dir(dir.join("logs")) {
+            for e in entries.flatten() {
+                let fname = e.file_name().to_string_lossy().into_owned();
+                let prefix = format!("{}@", ma.file);
+                if let Some(rest) = fname.strip_prefix(&prefix) {
+                    if let Some(vname) = rest.strip_suffix(".log") {
+                        let mut vsession = build_session(&dir, &ma.file);
+                        let mut scratch = Process::default();
+                        let (mut vseq, mut vtip) = (1u64, GENESIS.to_string());
+                        if let Ok(log) = std::fs::read_to_string(e.path()) {
+                            if !log.trim().is_empty() {
+                                let (last, tip) = replay_signed(&mut vsession, &mut scratch, &log, &secret)
+                                    .expect("replay version log");
+                                vseq = last + 1;
+                                vtip = tip;
+                            }
+                        }
+                        eprintln!("{}@{vname}: version replayed ({} events)", ma.file, vseq - 1);
+                        versions.insert(vname.to_string(), VState {
+                            session: vsession,
+                            next_seq: vseq,
+                            chain_tip: vtip,
+                            log_path: e.path(),
+                        });
+                    }
+                }
+            }
+        }
+        states.insert(ma.file.clone(), ModelState {
+            primary: VState { session, next_seq, chain_tip, log_path },
+            process,
+            versions,
+        });
     }
 
     let listener = TcpListener::bind(format!("127.0.0.1:{port}")).expect("bind");
@@ -444,32 +493,192 @@ fn main() {
             continue;
         }
         let st = states.get_mut(&model).expect("state exists for access-listed model");
+        let ModelState { primary, process, versions } = st;
+        // ?version=… targets a forecast copy; absent = the primary.
+        let version = get("version").filter(|v| !v.is_empty());
+        let in_version = version.is_some();
+        // ---- version management (needs primary + versions together) ----
+        if method == "GET" && path == "/versions" {
+            let mut names: Vec<&String> = versions.keys().collect();
+            names.sort();
+            let items: Vec<String> = names
+                .iter()
+                .map(|n| format!(
+                    "{{\"name\":\"{}\",\"seq\":{}}}",
+                    json_escape(n),
+                    versions[*n].next_seq - 1
+                ))
+                .collect();
+            respond(&mut stream, 200, &format!("{{\"ok\":true,\"versions\":[{}]}}", items.join(",")));
+            continue;
+        }
+        if method == "POST" && path == "/version" {
+            if user.role == Role::Viewer {
+                respond(&mut stream, 403, &err_json("viewers cannot create versions"));
+                continue;
+            }
+            let Some(name) = get("name") else {
+                respond(&mut stream, 400, &err_json("need name"));
+                continue;
+            };
+            let ok_name = !name.is_empty()
+                && name.len() <= 40
+                && name.chars().all(|c| c.is_ascii_alphanumeric() || "+-_. ".contains(c))
+                && !name.contains("..");
+            if !ok_name {
+                respond(&mut stream, 400, &err_json("version names: letters, digits, + - _ . space (max 40)"));
+                continue;
+            }
+            if versions.contains_key(&name) {
+                respond(&mut stream, 400, &err_json(&format!("version '{name}' already exists")));
+                continue;
+            }
+            // Fork from the APPROVED BASELINE files (reproducible forever
+            // as baseline + this version's own signed log). If you want
+            // uncommitted primary work included, checkpoint first.
+            let session = build_session(&dir, &model);
+            let log_path = dir.join("logs").join(format!("{}@{}.log", model, name));
+            let _ = std::fs::write(&log_path, "");
+            versions.insert(name.clone(), VState {
+                session,
+                next_seq: 1,
+                chain_tip: GENESIS.to_string(),
+                log_path,
+            });
+            respond(&mut stream, 200, &format!("{{\"ok\":true,\"version\":\"{}\"}}", json_escape(&name)));
+            continue;
+        }
+        if method == "POST" && path == "/version_drop" {
+            if user.role != Role::Admin {
+                respond(&mut stream, 403, &err_json("dropping versions is admin-only"));
+                continue;
+            }
+            let Some(name) = get("name") else {
+                respond(&mut stream, 400, &err_json("need name"));
+                continue;
+            };
+            match versions.remove(&name) {
+                Some(v) => {
+                    let _ = std::fs::rename(&v.log_path, format!("{}.dropped", v.log_path.display()));
+                    respond(&mut stream, 200, "{\"ok\":true}");
+                }
+                None => respond(&mut stream, 404, &err_json(&format!("unknown version '{name}'"))),
+            }
+            continue;
+        }
+        if method == "POST" && path == "/promote" {
+            // Promotion is a management decision: the version's input cells
+            // become the primary's, as ORDINARY signed patch events
+            // attributed to the promoting admin — fully audited, replayable.
+            if user.role != Role::Admin {
+                respond(&mut stream, 403, &err_json("promoting a version is admin-only"));
+                continue;
+            }
+            let Some(name) = get("name") else {
+                respond(&mut stream, 400, &err_json("need name"));
+                continue;
+            };
+            let Some(v) = versions.get(&name) else {
+                respond(&mut stream, 404, &err_json(&format!("unknown version '{name}'")));
+                continue;
+            };
+            let ts_now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            // Diff every literal-editable cell; apply differences as patches.
+            let mut planned: Vec<(String, Option<String>, Option<usize>, f64)> = Vec::new();
+            {
+                let ck = &v.session.checked;
+                let mut seen = std::collections::HashSet::new();
+                for (m, mb, t_opt, _, _) in &ck.edit_sites {
+                    let mname = ck.measures[*m].name.clone();
+                    let label = ck.tuple_label(*m, *mb);
+                    if !seen.insert((mname.clone(), label.clone(), *t_opt)) {
+                        continue;
+                    }
+                    let member = if label.is_empty() { None } else { Some(label.clone()) };
+                    let probe = t_opt.or(Some(ck.measures[*m].range.0));
+                    let vv = v.session.get(&mname, member.as_deref(), probe);
+                    let pv = primary.session.get(&mname, member.as_deref(), probe);
+                    if let (Ok(vv), Ok(pv)) = (vv, pv) {
+                        if (vv - pv).abs() > 1e-9 {
+                            planned.push((mname, member, *t_opt, vv));
+                        }
+                    }
+                }
+            }
+            let mut applied = 0usize;
+            let mut failed: Option<String> = None;
+            for (mname, member, t_opt, vv) in planned {
+                match primary.session.patch_input(&mname, member.as_deref(), t_opt, vv) {
+                    Ok(_) => {
+                        let ev = Event {
+                            seq: primary.next_seq,
+                            user: user.name.clone(),
+                            kind: "patch".into(),
+                            name: mname,
+                            member,
+                            period: t_opt,
+                            value: vv,
+                            text: None,
+                            ts: ts_now,
+                        };
+                        append_event(primary, &secret, &ev);
+                        applied += 1;
+                    }
+                    Err(e) => {
+                        failed = Some(e);
+                        break;
+                    }
+                }
+            }
+            match failed {
+                Some(e) => respond(&mut stream, 500, &err_json(&format!("promote stopped after {applied} cells: {e}"))),
+                None => respond(
+                    &mut stream,
+                    200,
+                    &format!("{{\"ok\":true,\"promoted\":\"{}\",\"cells\":{applied},\"seq\":{}}}", json_escape(&name), primary.next_seq - 1),
+                ),
+            }
+            continue;
+        }
+        let vs: &mut VState = match &version {
+            Some(v) => match versions.get_mut(v) {
+                Some(x) => x,
+                None => {
+                    respond(&mut stream, 404, &err_json(&format!("unknown version '{v}' — create it with POST /version")));
+                    continue;
+                }
+            },
+            None => primary,
+        };
 
         match (method, path) {
             ("GET", "/state") => {
                 let stats = format!(
                     "\"seq\":{},\"process\":{},\"steps_run\":0,\"steps_total\":0,\"nodes_changed\":0,",
-                    st.next_seq - 1,
-                    process_json(&st.process)
+                    vs.next_seq - 1,
+                    process_json(process)
                 );
-                let json = openfml::wasm::dump_state(&mut st.session, &stats, false);
+                let json = openfml::wasm::dump_state(&mut vs.session, &stats, false);
                 respond(&mut stream, 200, &json);
             }
             ("GET", "/info") => {
                 // The model's structural self-description (files/includes,
                 // measure graph, dims, asserts) — any reader may see it;
                 // reading the source is already granted via /model.
-                respond(&mut stream, 200, &st.session.model_info_json());
+                respond(&mut stream, 200, &vs.session.model_info_json());
             }
             ("GET", "/seq") => {
                 respond(
                     &mut stream,
                     200,
-                    &format!("{{\"ok\":true,\"seq\":{},\"process\":{}}}", st.next_seq - 1, process_json(&st.process)),
+                    &format!("{{\"ok\":true,\"seq\":{},\"process\":{}}}", vs.next_seq - 1, process_json(process)),
                 );
             }
             ("GET", "/process") => {
-                respond(&mut stream, 200, &format!("{{\"ok\":true,\"process\":{}}}", process_json(&st.process)));
+                respond(&mut stream, 200, &format!("{{\"ok\":true,\"process\":{}}}", process_json(process)));
             }
             ("GET", "/grants") => {
                 // Effective per-user grants (directory × access × role).
@@ -506,7 +715,7 @@ fn main() {
                 respond(
                     &mut stream,
                     200,
-                    &format!("{{\"ok\":true,\"src\":\"{}\"}}", json_escape(st.session.source())),
+                    &format!("{{\"ok\":true,\"src\":\"{}\"}}", json_escape(vs.session.source())),
                 );
             }
             ("POST", "/checkpoint") => {
@@ -517,8 +726,12 @@ fn main() {
                     respond(&mut stream, 403, &err_json("checkpoint is admin-only"));
                     continue;
                 }
+                if in_version {
+                    respond(&mut stream, 400, &err_json("checkpoint applies to the primary — promote the version first"));
+                    continue;
+                }
                 let mut written = Vec::new();
-                for f in st.session.files() {
+                for f in primary.session.files() {
                     let path = dir.join("models").join(&f.name);
                     if let Err(e) = std::fs::write(&path, &f.text) {
                         respond(&mut stream, 500, &err_json(&format!("write {}: {e}", f.name)));
@@ -526,13 +739,13 @@ fn main() {
                     }
                     written.push(f.name.clone());
                 }
-                let archived = format!("{}.{}.archived", st.log_path.display(), st.next_seq - 1);
-                if st.log_path.exists() {
-                    let _ = std::fs::rename(&st.log_path, &archived);
+                let archived = format!("{}.{}.archived", primary.log_path.display(), primary.next_seq - 1);
+                if primary.log_path.exists() {
+                    let _ = std::fs::rename(&primary.log_path, &archived);
                 }
-                st.next_seq = 1;
-                st.chain_tip = GENESIS.to_string();
-                st.process = Process::default();
+                primary.next_seq = 1;
+                primary.chain_tip = GENESIS.to_string();
+                *process = Process::default();
                 respond(
                     &mut stream,
                     200,
@@ -548,12 +761,16 @@ fn main() {
                     respond(&mut stream, 403, &err_json("the audit log is admin-only"));
                     continue;
                 }
-                let log = std::fs::read_to_string(&st.log_path).unwrap_or_default();
+                let log = std::fs::read_to_string(&vs.log_path).unwrap_or_default();
                 respond(&mut stream, 200, &format!("{{\"ok\":true,\"log\":\"{}\"}}", json_escape(&log)));
             }
             ("POST", "/patch") | ("POST", "/formula") | ("POST", "/submit") | ("POST", "/reopen")
             | ("POST", "/lock") => {
-                let ev = match build_event(path, &user, st, &get) {
+                if in_version && matches!(path, "/submit" | "/reopen" | "/lock") {
+                    respond(&mut stream, 400, &err_json("round actions apply to the primary, not a version"));
+                    continue;
+                }
+                let ev = match build_event(path, &user, vs.next_seq, &get) {
                     Ok(ev) => ev,
                     Err(e) => {
                         respond(&mut stream, 400, &err_json(&e));
@@ -567,27 +784,24 @@ fn main() {
                         continue;
                     }
                 };
-                // THE gate, then apply, then sign, then append.
-                if let Err(e) = gate(&user, ma, &st.process, &action) {
+                // THE gate — versions keep role + grants but ignore round
+                // state (that is their point: draft the next forecast while
+                // the budget of record is submitted or locked).
+                let open = Process::default();
+                let gate_process: &Process = if in_version { &open } else { process };
+                if let Err(e) = gate(&user, ma, gate_process, &action) {
                     respond(&mut stream, 403, &err_json(&e));
                     continue;
                 }
-                match apply_event(&mut st.session, &mut st.process, &ev) {
+                let mut scratch = Process::default();
+                let apply_process: &mut Process = if in_version { &mut scratch } else { process };
+                match apply_event(&mut vs.session, apply_process, &ev) {
                     Ok(()) => {
-                        let line = ev.to_line();
-                        let sig = sign_line(&secret, &st.chain_tip, &line);
-                        let mut f = std::fs::OpenOptions::new()
-                            .create(true)
-                            .append(true)
-                            .open(&st.log_path)
-                            .expect("open log");
-                        writeln!(f, "{line}\t{sig}").expect("append log");
-                        st.chain_tip = sig;
-                        st.next_seq += 1;
+                        append_event(vs, &secret, &ev);
                         respond(
                             &mut stream,
                             200,
-                            &format!("{{\"ok\":true,\"seq\":{},\"process\":{}}}", ev.seq, process_json(&st.process)),
+                            &format!("{{\"ok\":true,\"seq\":{},\"process\":{}}}", ev.seq, process_json(process)),
                         );
                     }
                     Err(e) => respond(&mut stream, 400, &err_json(&e)),
@@ -598,13 +812,27 @@ fn main() {
     }
 }
 
+/// Sign an event over the state's chain tip and append it to its log.
+fn append_event(vs: &mut VState, secret: &[u8], ev: &Event) {
+    let line = ev.to_line();
+    let sig = sign_line(secret, &vs.chain_tip, &line);
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&vs.log_path)
+        .expect("open log");
+    writeln!(f, "{line}\t{sig}").expect("append log");
+    vs.chain_tip = sig;
+    vs.next_seq += 1;
+}
+
 fn build_event(
     path: &str,
     user: &User,
-    st: &ModelState,
+    next_seq: u64,
     get: &dyn Fn(&str) -> Option<String>,
 ) -> Result<Event, String> {
-    let seq = st.next_seq;
+    let seq = next_seq;
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())

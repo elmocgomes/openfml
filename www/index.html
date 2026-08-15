@@ -32,8 +32,9 @@
     letter-spacing:.3px; border-bottom:1px solid var(--navy3); }
   #side .logo small { display:block; font-weight:400; color:#8fa3bb; font-size:.62rem;
     letter-spacing:1px; text-transform:uppercase; margin-top:.15rem; }
-  #modelSel { margin:.8rem 1rem .3rem; width:calc(100% - 2rem); background:var(--navy2);
+  #modelSel, #verSel { margin:.8rem 1rem .3rem; width:calc(100% - 2rem); background:var(--navy2);
     color:#fff; border:1px solid var(--navy3); border-radius:6px; padding:.4rem .5rem; font-size:.86rem; }
+  #verSel { margin-top:0; padding:.28rem .5rem; }
   #side nav { margin-top:.5rem; flex:1; }
   #side nav a { display:flex; align-items:center; gap:.65rem; padding:.5rem 1.1rem; color:#cfd9e6;
     text-decoration:none; font-size:.9rem; border-left:3px solid transparent; cursor:pointer; }
@@ -358,6 +359,7 @@
 <aside id="side">
   <div class="logo">OpenFML<small>modelling studio</small></div>
   <select id="modelSel" title="Model"></select>
+  <select id="verSel" title="Version" style="display:none;margin-top:.3rem;font-size:.85rem;color:#ffd9a0"></select>
   <nav>
     <a data-p="overview" class="on"><span class="ic">◧</span>Overview</a>
     <a data-p="budget"><span class="ic">▦</span>Budget</a>
@@ -806,9 +808,10 @@ function commitCell(inp, dir) {
     (async () => {
       let last = null;
       for (const [t, v] of entries) {
-        const r = await (await fetch(SERVER + "/patch", { method: "POST", body: JSON.stringify({
+        const r = await (await fetch(SERVER + "/patch", { method: "POST", body: JSON.stringify(Object.assign({
           token: TOKEN, model: document.getElementById("modelSel").value,
-          name, member, period: String(t), value: String(v) }) })).json();
+          name, member, period: String(t), value: String(v) },
+          window.clientVersion && window.clientVersion() ? { version: window.clientVersion() } : {})) })).json();
         if (!r.ok) { toast(r.error, true); PENDING_FOCUS = null; return; }
         last = r;
       }
@@ -928,9 +931,10 @@ function commitSplash(inp, dir) {
       let last = null;
       for (const [member, entries] of perMember) {
         for (const [t, v] of entries) {
-          const r = await (await fetch(SERVER + "/patch", { method: "POST", body: JSON.stringify({
+          const r = await (await fetch(SERVER + "/patch", { method: "POST", body: JSON.stringify(Object.assign({
             token: TOKEN, model: document.getElementById("modelSel").value,
-            name: key, member, period: String(t), value: String(v) }) })).json();
+            name: key, member, period: String(t), value: String(v) },
+            window.clientVersion && window.clientVersion() ? { version: window.clientVersion() } : {})) })).json();
           if (!r.ok) { toast(r.error, true); PENDING_FOCUS = null; return; }
           last = r;
         }
@@ -2021,21 +2025,63 @@ if (SERVER) {
   document.querySelector("#pageBudget .tlbl").style.display = "none";
   document.getElementById("src").readOnly = true;
   let ME = { user: USER, dept: "?", role: "viewer" };
+  let clientVer = PARAMS.get("version") || "";
+  window.clientVersion = () => clientVer;
   window.clientMe = () => ME;
   const whoBox = document.getElementById("whoBox");
+  async function loadVersions() {
+    const vsel = document.getElementById("verSel");
+    let names = [];
+    try {
+      const r = await (await fetch(SERVER + "/versions" + qs())).json();
+      if (r.ok) names = r.versions.map(v => v.name);
+    } catch { /* leave as is */ }
+    vsel.style.display = "";
+    vsel.innerHTML = `<option value="">Budget of record</option>`
+      + names.map(n => `<option value="${n}"${n === clientVer ? " selected" : ""}>version · ${n}</option>`).join("")
+      + (ME.role !== "viewer" ? `<option value="__new">＋ New version…</option>` : "");
+    vsel.onchange = async () => {
+      if (vsel.value === "__new") {
+        const name = (window.prompt("Name the new version (e.g. F3+9):") || "").trim();
+        if (name) {
+          const r = await post("/version", { name });
+          if (!r.ok) toast(r.error, true);
+          else { clientVer = name; toast(`version '${name}' created from the approved baseline`); }
+        }
+        await loadVersions();
+      } else {
+        clientVer = vsel.value;
+      }
+      await refreshFromServer(0, clientVer ? "version · " + clientVer : "budget of record");
+    };
+  }
   let clientModel = PARAMS.get("model") || null;
   let proc = { locked: false, submitted: [] };
-  const qs = () => `?token=${encodeURIComponent(TOKEN)}&model=${encodeURIComponent(clientModel)}`;
+  const qs = () => `?token=${encodeURIComponent(TOKEN)}&model=${encodeURIComponent(clientModel)}`
+    + (clientVer ? `&version=${encodeURIComponent(clientVer)}` : "");
   const post = (ep, extra) =>
-    fetch(SERVER + ep, { method: "POST", body: JSON.stringify(Object.assign({ token: TOKEN, model: clientModel }, extra || {})) })
+    fetch(SERVER + ep, { method: "POST", body: JSON.stringify(Object.assign(
+      { token: TOKEN, model: clientModel }, clientVer ? { version: clientVer } : {}, extra || {})) })
       .then(r => r.json());
-  window.clientCanEdit = () =>
-    !proc.locked && ME.role !== "viewer" && (ME.role === "admin" || !proc.submitted.includes(ME.dept));
+  window.clientCanEdit = () => clientVer
+    ? ME.role !== "viewer"
+    : !proc.locked && ME.role !== "viewer" && (ME.role === "admin" || !proc.submitted.includes(ME.dept));
   function renderProc() {
     const b = document.getElementById("procBanner");
     b.style.display = "flex";
     b.classList.toggle("locked", proc.locked);
     let html = `<b>${ME.user}</b> <span class="tag">${ME.dept} · ${ME.role}</span>`;
+    if (clientVer) {
+      html += ` <span class="tag sub">working in version · ${clientVer}</span>
+        <button id="pBack">back to budget of record</button>`;
+      b.innerHTML = html;
+      b.querySelector("#pBack").addEventListener("click", async () => {
+        clientVer = "";
+        await loadVersions();
+        await refreshFromServer(0, "budget of record");
+      });
+      return;
+    }
     if (proc.locked) {
       html += ` <b>BUDGET LOCKED</b>`;
     } else if (proc.submitted.includes(ME.dept) && ME.role !== "admin") {
@@ -2187,7 +2233,9 @@ if (SERVER) {
   if (clientModel) msel0.value = clientModel;
   msel0.addEventListener("change", async () => {
     clientModel = msel0.value;
+    clientVer = "";
     await loadGrantsAndState();
+    await loadVersions();
   });
   async function loadGrantsAndState() {
     const g = await (await fetch(SERVER + "/grants" + qs())).json();
@@ -2196,6 +2244,7 @@ if (SERVER) {
   }
   window.clientQs = qs;
   await loadGrantsAndState();
+  await loadVersions();
   setInterval(async () => {
     try {
       const s = await (await fetch(SERVER + "/seq" + qs())).json();

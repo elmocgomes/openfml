@@ -150,3 +150,98 @@ input spend : EUR flow over y = { 2026: 100, 2027: 110 }\ntotal : EUR flow over 
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn versions_fork_edit_promote_and_survive_restart() {
+    let port: u16 = 43000 + (std::process::id() % 1000) as u16;
+    let dir = std::env::temp_dir().join(format!("fml_ver_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("models")).unwrap();
+    std::fs::write(dir.join("users.cfg"), "alice: marketing editor\ncarol: finance admin\n").unwrap();
+    std::fs::write(
+        dir.join("access.cfg"),
+        "model plan.fml\n  departments marketing finance\n  write marketing: spend\n  write finance: *\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("models/plan.fml"),
+        "model demo.plan\ncalendar y = yearly 2026 .. 2027\ncurrency EUR\n\
+input spend : EUR flow over y = { 2026: 100, 2027: 110 }\ntotal : EUR flow over y = spend * 2\n",
+    )
+    .unwrap();
+    let mint = |user: &str| -> String {
+        let out = Command::new(env!("CARGO_BIN_EXE_openfml-server"))
+            .args(["token", user, dir.join("server.secret").to_str().unwrap()])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    let alice = mint("alice");
+    let carol = mint("carol");
+    let spawn = || {
+        Command::new(env!("CARGO_BIN_EXE_openfml-server"))
+            .args([dir.to_str().unwrap(), &port.to_string()])
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap()
+    };
+    let child = spawn();
+    let mut guard = Guard(child);
+    wait_up(port);
+
+    // An editor forks a version from the baseline…
+    let r = http(port, "POST", "/version",
+        &format!("{{\"token\":\"{alice}\",\"model\":\"plan.fml\",\"name\":\"f39\"}}"));
+    assert!(r.contains("\"ok\":true"), "{r}");
+    // …the admin locks the PRIMARY round…
+    assert!(http(port, "POST", "/lock", &format!("{{\"token\":\"{carol}\",\"model\":\"plan.fml\"}}")).contains("\"ok\":true"));
+    // …primary editing stops, but the version stays open (its point):
+    let locked = http(port, "POST", "/patch",
+        &format!("{{\"token\":\"{alice}\",\"model\":\"plan.fml\",\"name\":\"spend\",\"period\":\"0\",\"value\":\"150\"}}"));
+    assert!(locked.contains("locked"), "{locked}");
+    let r = http(port, "POST", "/patch",
+        &format!("{{\"token\":\"{alice}\",\"model\":\"plan.fml\",\"version\":\"f39\",\"name\":\"spend\",\"period\":\"0\",\"value\":\"200\"}}"));
+    assert!(r.contains("\"ok\":true"), "version edits ignore round state: {r}");
+    // Grants still bind inside versions.
+    let r = http(port, "POST", "/patch",
+        &format!("{{\"token\":\"{alice}\",\"model\":\"plan.fml\",\"version\":\"f39\",\"name\":\"total\",\"period\":\"0\",\"value\":\"1\"}}"));
+    assert!(r.contains("may not write total"), "{r}");
+    // Isolation: the version sees 200, the primary still 100.
+    let v = http(port, "GET", &format!("/state?token={alice}&model=plan.fml&version=f39"), "");
+    assert!(v.contains("\"vals\":[200,110]"), "version spend row: {v}");
+    let p = http(port, "GET", &format!("/state?token={alice}&model=plan.fml"), "");
+    assert!(p.contains("\"vals\":[100,110]"), "primary spend untouched: {p}");
+    // Round actions refuse versions; unknown versions 404.
+    assert!(http(port, "POST", "/submit",
+        &format!("{{\"token\":\"{alice}\",\"model\":\"plan.fml\",\"version\":\"f39\"}}")).contains("apply to the primary"));
+    assert!(http(port, "GET", &format!("/state?token={alice}&model=plan.fml&version=nope"), "").contains("unknown version"));
+
+    // Restart: the version replays from baseline + its own signed log.
+    drop(guard);
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    guard = Guard(spawn());
+    wait_up(port);
+    let v = http(port, "GET", &format!("/state?token={alice}&model=plan.fml&version=f39"), "");
+    assert!(v.contains("\"vals\":[200,110]"), "version survives restart: {v}");
+
+    // Promote: the admin folds the version into the primary as ordinary
+    // signed patches (a management decision — works even while locked).
+    let r = http(port, "POST", "/promote",
+        &format!("{{\"token\":\"{carol}\",\"model\":\"plan.fml\",\"name\":\"f39\"}}"));
+    assert!(r.contains("\"cells\":1"), "{r}");
+    let p = http(port, "GET", &format!("/state?token={carol}&model=plan.fml"), "");
+    assert!(p.contains("\"vals\":[200,110]"), "primary carries the promoted value: {p}");
+    let log = http(port, "GET", &format!("/log?token={carol}&model=plan.fml"), "");
+    assert!(log.contains(r"carol\tpatch\tspend"), "promotion is attributed in the audit chain: {log}");
+
+    // Cleanup rights: editors cannot drop versions; admins can.
+    assert!(http(port, "POST", "/version_drop",
+        &format!("{{\"token\":\"{alice}\",\"model\":\"plan.fml\",\"name\":\"f39\"}}")).contains("admin-only"));
+    assert!(http(port, "POST", "/version_drop",
+        &format!("{{\"token\":\"{carol}\",\"model\":\"plan.fml\",\"name\":\"f39\"}}")).contains("\"ok\":true"));
+    assert!(http(port, "GET", &format!("/versions?token={alice}&model=plan.fml"), "").contains("\"versions\":[]"));
+
+    drop(guard);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
