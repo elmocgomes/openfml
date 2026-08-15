@@ -77,6 +77,8 @@
   .grid th:first-child, .grid td:first-child { text-align: left; position: sticky; left: 0; background: var(--card);
                    z-index: 1; min-width: 190px; }
   .grid tr.ghead td { background: #f0f3f8; font-weight: 700; color: var(--navy2); font-size: .85rem; }
+  .grid tr.ghead td.sp.in { background: #fdf6ec; cursor: text; color: var(--warn); }
+  .grid tr.ghead td.sp.in:hover { background: #f9edd6; }
   .grid td.mname { padding-left: 2rem; color: var(--ink); }
   .grid .unit { color: var(--mut); font-size: .78rem; margin-left: .45rem; font-weight: 400; }
   .grid td.in { background: var(--amber); cursor: text; }
@@ -351,7 +353,23 @@ function pageEntry() {
   for (const r of s.series || []) {
     const grouped = !!r.member;
     if (grouped && r.key !== lastKey) {
-      rows += `<tr class="ghead"><td colspan="${s.periods.length + 1}" data-mh="${esc(r.key)}">${esc(r.key)}<span class="unit">${esc(r.unit)}</span></td></tr>`;
+      // Σ splash row: type a total here — it distributes to the members
+      // in proportion (only when you may write every member).
+      const members = s.series.filter(x => x.key === r.key);
+      const totMax = Math.max(0, ...r.vals.map((_, t) =>
+        Math.abs(members.reduce((a, m) => a + (m.vals[t] || 0), 0))));
+      rows += `<tr class="ghead"><td data-mh="${esc(r.key)}">Σ ${esc(r.key)}<span class="unit">${esc(r.unit)}</span></td>`;
+      r.vals.forEach((_, t) => {
+        const tot = members.reduce((a, m) => a + (m.vals[t] || 0), 0);
+        const inR = t >= r.range[0] && t <= r.range[1];
+        const ok = inR && editableRound && members.every(m => {
+          const sited = m.edit === "all" ? true : Array.isArray(m.edit) && m.edit.includes(t);
+          return m.input && sited && authorized(m.key, m.member || null);
+        });
+        rows += `<td class="num sp${ok ? " in" : ""}" data-raw="${tot}"
+          ${ok ? `data-skey="${esc(r.key)}" data-st="${t}"` : ""}>${inR ? fmtCell(tot, r.unit, totMax) : "·"}</td>`;
+      });
+      rows += `</tr>`;
     }
     lastKey = grouped ? r.key : null;
     const label = grouped ? r.member : r.name;
@@ -387,7 +405,9 @@ function pageEntry() {
     PROC = r.process; toast(`${ME.dept} submitted — finance can now review`); await refresh(); renderPage();
   });
   const cellSel = (k, mb, t) =>
-    `td.in[data-key="${CSS.escape(k)}"][data-member="${CSS.escape(mb || "")}"]` + (t !== undefined ? `[data-t="${t}"]` : "");
+    `td.in[data-key="${CSS.escape(k)}"]` +
+    (mb === undefined ? "" : `[data-member="${CSS.escape(mb || "")}"]`) +
+    (t !== undefined ? `[data-t="${t}"]` : "");
   const cellCur = td => {
     const raw = td.dataset.raw;
     return raw === undefined || raw === "" ? 0 : Number(raw);
@@ -403,7 +423,7 @@ function pageEntry() {
     const col = [...document.querySelectorAll(`td.in[data-t="${td.dataset.t}"]`)];
     return col[col.findIndex(x => x === td) + 1] || null;
   };
-  document.querySelectorAll("td.in").forEach(td => td.addEventListener("click", () => {
+  document.querySelectorAll("td.in:not(.sp)").forEach(td => td.addEventListener("click", () => {
     if (td.querySelector("input")) return;
     const cur = cellCur(td);
     td.innerHTML = `<input value="${cur || cur === 0 ? cur : ""}">`;
@@ -473,6 +493,66 @@ function pageEntry() {
     if (!moveTo) return;
     document.querySelector(cellSel(moveTo.k, moveTo.mb, moveTo.t))?.click();
   }
+  document.querySelectorAll("td.sp.in").forEach(td => td.addEventListener("click", () => {
+    if (td.querySelector("input")) return;
+    const key = td.dataset.skey, t0 = Number(td.dataset.st);
+    const cur = Number(td.dataset.raw) || 0;
+    td.innerHTML = `<input value="${cur}">`;
+    const inp = td.querySelector("input");
+    inp.focus(); inp.select();
+    let done = false;
+    const commit = async () => {
+      if (done) return;
+      done = true;
+      const parsed = parseEntry(inp.value, cur);
+      if (parsed === null) {
+        if (inp.value.trim() !== "") toast(`didn't understand "${inp.value}" — hover ⌨ entry codes`, true);
+        renderPage(); return;
+      }
+      const row = [...document.querySelectorAll(`td.sp.in[data-skey="${CSS.escape(key)}"]`)]
+        .filter(x => Number(x.dataset.st) >= t0)
+        .sort((a, b) => Number(a.dataset.st) - Number(b.dataset.st));
+      let totals;
+      switch (parsed.op) {
+        case "set": totals = [[t0, parsed.v]]; break;
+        case "repeat": totals = row.map(c => [Number(c.dataset.st), parsed.v]); break;
+        case "even": totals = row.map(c => [Number(c.dataset.st), parsed.v / row.length]); break;
+        case "prop": {
+          const tt = row.reduce((a, c) => a + (Number(c.dataset.raw) || 0), 0);
+          totals = Math.abs(tt) < 1e-12
+            ? row.map(c => [Number(c.dataset.st), parsed.v / row.length])
+            : row.map(c => [Number(c.dataset.st), parsed.v * (Number(c.dataset.raw) || 0) / tt]);
+          break;
+        }
+        case "grow":
+          totals = row.slice(1).map(c =>
+            [Number(c.dataset.st), cur * Math.pow(1 + parsed.pct, Number(c.dataset.st) - t0)]);
+          break;
+      }
+      let n = 0, last = null;
+      for (const [t, total] of totals || []) {
+        const cells = [...document.querySelectorAll(cellSel(key, undefined))]
+          .filter(x => x.dataset.member !== undefined && Number(x.dataset.t) === t);
+        if (!cells.length) continue;
+        const sum = cells.reduce((a, c) => a + cellCur(c), 0);
+        for (const c of cells) {
+          const share = Math.abs(sum) < 1e-12 ? total / cells.length : total * cellCur(c) / sum;
+          if (Math.abs(share - cellCur(c)) < 1e-12) continue;
+          const r2 = await post("/patch", { name: key, member: c.dataset.member,
+            period: String(t), value: String(share) });
+          if (!r2.ok) { toast(r2.error, true); renderPage(); return; }
+          last = r2; n++;
+        }
+      }
+      await refresh(); renderPage();
+      if (n) toast(`splashed across ${n} cells · commit #${last.seq}`);
+    };
+    inp.addEventListener("keydown", e => {
+      if (e.key === "Enter") { e.preventDefault(); commit(); }
+      else if (e.key === "Escape") { done = true; renderPage(); }
+    });
+    inp.addEventListener("blur", () => commit());
+  }));
   $("entryHelp")?.addEventListener("mouseover", e => showTipAt(e.clientX, e.clientY, ENTRY_LEGEND));
   $("entryHelp")?.addEventListener("mouseleave", hideTip);
   $("fmtBtn")?.addEventListener("click", e => {
@@ -608,6 +688,7 @@ const ENTRY_LEGEND = `<span class="ht">cell entry codes</span><span class="hk">p
 6k/&gt;            split 6k evenly, this period onward
 6k%&gt;            spread 6k in proportion to current values
 g5&gt;             grow 5% per period from this cell
+Σ total rows    type there — splashes down in proportion
 Enter ↓ · Tab → commit and move</div>`;
 let TRACE_INFO = null, traceOpen = new Set(), traceRoot = null;
 const DOCS = {

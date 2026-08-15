@@ -216,6 +216,9 @@
   tbody tr:hover td:first-child { box-shadow: 2px 0 4px -2px rgba(16,30,54,.12),
     inset 0 0 0 999px rgba(22,40,63,.035); }
   tr.inp td { background: var(--amber); }
+  tr.splash td { background:#fdf6ec; font-weight:600; }
+  tr.splash td:first-child { background:var(--card); color:var(--warn); font-weight:700; }
+  tr.splash td input { border-bottom:1px dashed var(--warn); background:rgba(176,96,0,.05); font-weight:600; }
   tr.inp td:first-child { background: var(--card); color: var(--pri); font-weight:600; }
   td.neg { color: var(--bad); }
   td.chg { background: #d7e7ff; }
@@ -803,6 +806,114 @@ function commitCell(inp, dir) {
   syncPatchResult(result, (performance.now() - t0) * 1000,
     entries.length > 1 ? `spread ${entries.length} cells (grid→text)` : "grid→text patch + recalc");
 }
+// Splash a group-total entry down to the members, in proportion to their
+// current values (equal split when the members sum to zero). Entry codes
+// apply to the TOTAL: "24k/>" splits 24k evenly across periods, each
+// period then distributing to members.
+function commitSplash(inp, dir) {
+  const key = inp.dataset.splash;
+  const raw = inp.value;
+  const cur = Number(inp.defaultValue) || 0;
+  const move = dir ? (() => {
+    // down = the first member cell below at the same period
+    const m = document.querySelector(
+      `td input[data-key="${CSS.escape(key)}"][data-t="${inp.dataset.t}"]`);
+    if (dir === "down" && m) return { key: m.dataset.key, member: m.dataset.member, t: m.dataset.t };
+    const row = [...document.querySelectorAll(`td input[data-splash="${CSS.escape(key)}"]`)]
+      .sort((a, b) => Number(a.dataset.t) - Number(b.dataset.t));
+    const i = row.findIndex(x => x === inp);
+    const n = row[i + (dir === "right" ? 1 : dir === "left" ? -1 : 0)];
+    return n && n !== inp ? { splash: key, t: n.dataset.t } : null;
+  })() : null;
+  const parsed = parseEntry(raw, cur);
+  if (parsed === null) {
+    if (raw.trim() !== "") toast(`didn't understand "${raw}" — hover ⌨ entry codes`, true);
+    inp.value = inp.defaultValue;
+    return;
+  }
+  // Period targets for the TOTAL (reuse the rightward machinery over the
+  // splash row itself).
+  const row = [...document.querySelectorAll(`td input[data-splash="${CSS.escape(key)}"]`)]
+    .filter(x => Number(x.dataset.t) >= Number(inp.dataset.t))
+    .sort((a, b) => Number(a.dataset.t) - Number(b.dataset.t));
+  const curAt = t => Number(row.find(c => Number(c.dataset.t) === t)?.defaultValue) || 0;
+  let totals;
+  switch (parsed.op) {
+    case "set": totals = [[Number(inp.dataset.t), parsed.v]]; break;
+    case "repeat": totals = row.map(c => [Number(c.dataset.t), parsed.v]); break;
+    case "even": totals = row.map(c => [Number(c.dataset.t), parsed.v / row.length]); break;
+    case "prop": {
+      const tt = row.reduce((a, c) => a + (Number(c.defaultValue) || 0), 0);
+      totals = Math.abs(tt) < 1e-12
+        ? row.map(c => [Number(c.dataset.t), parsed.v / row.length])
+        : row.map(c => [Number(c.dataset.t), parsed.v * (Number(c.defaultValue) || 0) / tt]);
+      break;
+    }
+    case "grow": {
+      const t0 = Number(inp.dataset.t);
+      totals = row.slice(1).map(c =>
+        [Number(c.dataset.t), curAt(t0) * Math.pow(1 + parsed.pct, Number(c.dataset.t) - t0)]);
+      break;
+    }
+  }
+  // Distribute each period total across the member cells.
+  const perMember = new Map(); // member → [[t, v]]
+  for (const [t, total] of totals || []) {
+    const cells = [...document.querySelectorAll(
+      `td input[data-key="${CSS.escape(key)}"][data-t="${t}"]`)];
+    if (!cells.length) continue;
+    const sum = cells.reduce((a, c) => a + (Number(c.defaultValue) || 0), 0);
+    for (const c of cells) {
+      const share = Math.abs(sum) < 1e-12
+        ? total / cells.length
+        : total * (Number(c.defaultValue) || 0) / sum;
+      if (Math.abs(share - (Number(c.defaultValue) || 0)) < 1e-12) continue;
+      const mb = c.dataset.member || "";
+      if (!perMember.has(mb)) perMember.set(mb, []);
+      perMember.get(mb).push([Number(c.dataset.t), share]);
+    }
+  }
+  if (!perMember.size) {
+    inp.value = inp.defaultValue;
+    if (move) { PENDING_FOCUS = move.splash ? null : move; focusPending(); }
+    return;
+  }
+  PENDING_FOCUS = move && !move.splash ? move : null;
+  const n = [...perMember.values()].reduce((a, v) => a + v.length, 0);
+  if (SERVER) {
+    const t0 = performance.now();
+    (async () => {
+      let last = null;
+      for (const [member, entries] of perMember) {
+        for (const [t, v] of entries) {
+          const r = await (await fetch(SERVER + "/patch", { method: "POST", body: JSON.stringify({
+            token: TOKEN, model: document.getElementById("modelSel").value,
+            name: key, member, period: String(t), value: String(v) }) })).json();
+          if (!r.ok) { toast(r.error, true); PENDING_FOCUS = null; return; }
+          last = r;
+        }
+      }
+      await refreshFromServer((performance.now() - t0) * 1000, `splashed ${n} cells · #${last.seq}`);
+      toast(`splashed across ${n} cells · commit #${last.seq}`);
+    })();
+    return;
+  }
+  const t0 = performance.now();
+  let result = null;
+  for (const [member, entries] of perMember) {
+    writeInput(member ? key + "|" + member : key);
+    for (const [t, v] of entries) {
+      if (exports.fml_patch(Number(t), v) !== 0) {
+        toast(readResult().error, true);
+        PENDING_FOCUS = null;
+        return;
+      }
+      result = readResult();
+    }
+  }
+  syncPatchResult(result, (performance.now() - t0) * 1000, `splashed ${n} cells (grid→text)`);
+}
+
 const ENTRY_LEGEND = `<span class="ht">cell entry codes</span><span class="hk">planning-grid style</span>
   <div class="hx" style="margin-top:.4rem">12k · 1.5m      thousands / millions
 (500)           negative, accounting style
@@ -814,6 +925,7 @@ const ENTRY_LEGEND = `<span class="ht">cell entry codes</span><span class="hk">p
 6k/&gt;            split 6k evenly, this period onward
 6k%&gt;            spread 6k in proportion to current values
 g5&gt;             grow 5% per period from this cell
+Σ total rows    type there — splashes down in proportion
 Enter ↓ · Tab → commit and move</div>`;
 
 function render(r) {
@@ -835,7 +947,34 @@ function render(r) {
   const inScen = (r.active || "Base") !== "Base";
   let html = "<thead><tr><th>measure</th>" +
     r.periods.map(p => `<th>${p}</th>`).join("") + "</tr></thead><tbody>";
+  let splashDone = new Set();
+  const cellEditable = (row, t) => {
+    const inRange = t >= row.range[0] && t <= row.range[1];
+    let e = !inScen && (row.edit === "all" ? inRange : Array.isArray(row.edit) && row.edit.includes(t));
+    if (SERVER) e = e && authorized(row.key, row.member || null)
+      && (!window.clientCanEdit || window.clientCanEdit());
+    return e;
+  };
   for (const s of r.series) {
+    // Top-down splash entry: a Σ row above each dimensioned input group —
+    // type a total there and it distributes to the members in proportion.
+    if (s.input && s.member && !splashDone.has(s.key)) {
+      splashDone.add(s.key);
+      const members = r.series.filter(x => x.key === s.key);
+      if (members.length > 1) {
+        const totMax = Math.max(0, ...s.vals.map((_, t) =>
+          Math.abs(members.reduce((a, m) => a + (m.vals[t] || 0), 0))));
+        html += `<tr class="splash"><td title="Σ ${s.key} — type here to splash down">Σ ${s.key}<span class="unit">${s.unit}</span></td>`;
+        s.vals.forEach((_, t) => {
+          const tot = members.reduce((a, m) => a + (m.vals[t] || 0), 0);
+          const ok = members.every(m => cellEditable(m, t));
+          html += ok
+            ? `<td><input autocomplete="off" data-splash="${s.key}" data-t="${t}" value="${tot}"></td>`
+            : `<td class="${tot < 0 ? "neg" : ""}">${fmtCell(tot, s.unit, totMax)}</td>`;
+        });
+        html += "</tr>";
+      }
+    }
     const cls = s.input ? "inp" : "";
     const nameData = SERVER ? "" : ` class="mname" data-nkey="${s.key}" data-nmember="${s.member || ""}" data-nt="${s.range[0]}"`;
     html += `<tr class="${cls}"><td title="${s.name}"${nameData}>${s.name}<span class="unit">${s.unit}</span></td>`;
@@ -909,12 +1048,15 @@ function render(r) {
     });
   });
   document.querySelectorAll("td input").forEach(inp => {
+    const commit = inp.dataset.splash !== undefined
+      ? dir => commitSplash(inp, dir)
+      : dir => commitCell(inp, dir);
     inp.addEventListener("keydown", e => {
-      if (e.key === "Enter") { e.preventDefault(); commitCell(inp, "down"); }
-      else if (e.key === "Tab") { e.preventDefault(); commitCell(inp, e.shiftKey ? "left" : "right"); }
+      if (e.key === "Enter") { e.preventDefault(); commit("down"); }
+      else if (e.key === "Tab") { e.preventDefault(); commit(e.shiftKey ? "left" : "right"); }
       else if (e.key === "Escape") { inp.value = inp.defaultValue; inp.blur(); }
     });
-    inp.addEventListener("change", () => commitCell(inp, null));
+    inp.addEventListener("change", () => commit(null));
   });
 }
 // ---- the code editor: lexer-driven highlighting, error lines, completion ----
