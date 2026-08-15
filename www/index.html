@@ -558,6 +558,8 @@ function authorized(measure, member) {
 }
 // ---- multi-file state: main + any included files, with per-file drafts ----
 const srcBox = document.getElementById("src");
+let inspectStack = [];
+const cellDisplay = (name, member) => member ? `${name}[${member}]` : name;
 let fileTexts = {}, diskTexts = {}, activeFile = "";
 const mainFile = () => current + ".fml";
 // Main keeps the legacy draft key so pre-tabs drafts survive.
@@ -1154,7 +1156,7 @@ function render(r) {
         html += `<td class="${b50 !== null && b50 < 0 ? "neg" : ""}" title="p10 ${fmt(b10)} · p50 ${fmt(b50)} · p90 ${fmt(b90)}">${fmtCell(b50, s.unit, rowMax)}${band}</td>`;
       } else {
         const changed = prev[s.name] && prev[s.name][t] !== v;
-        const torn = !SERVER && !inScen && inRange && !s.input ? " torn" : "";
+        const torn = !inScen && inRange && !s.input ? " torn" : "";
         const tdata = torn ? ` data-tkey="${s.key}" data-tmember="${s.member || ""}" data-tt="${t}" title="click: explain this number"` : "";
         html += `<td class="${changed ? "chg" : ""}${inRange ? "" : " out"}${torn}${v !== null && v < 0 ? " neg" : ""}"${tdata}>${fmtCell(v, s.unit, rowMax)}</td>`;
       }
@@ -1199,7 +1201,7 @@ function render(r) {
           if (ed) {
             ph += `<td><input autocomplete="off" data-key="${s.key}" data-member="${mname}" data-t="${pT}" value="${v === null ? "" : v}"></td>`;
           } else {
-            const torn = !SERVER && !inScen && row && !row.input ? " torn" : "";
+            const torn = !inScen && row && !row.input ? " torn" : "";
             const tdata = torn ? ` data-tkey="${s.key}" data-tmember="${mname}" data-tt="${pT}" title="click: explain this number"` : "";
             ph += `<td class="${torn}${v !== null && v < 0 ? " neg" : ""}"${tdata}>${fmtCell(v, s.unit, rowMax)}</td>`;
           }
@@ -1263,7 +1265,7 @@ function render(r) {
     checksLbl.classList.toggle("bad", fails > 0);
   }
   document.getElementById("scalars").innerHTML = r.scalars.map(s =>
-    `<span${SERVER ? "" : ` class="scx" data-s="${s.name}" title="click: explain this number" style="cursor:pointer"`}>${s.name} = <b>${fmt(s.val)}</b><span class="unit">${s.unit}</span></span>`).join("");
+    `<span class="scx" data-s="${s.name}" title="click: explain this number" style="cursor:pointer">${s.name} = <b>${fmt(s.val)}</b><span class="unit">${s.unit}</span></span>`).join("");
   document.querySelectorAll("#scalars .scx").forEach(sp =>
     sp.addEventListener("click", () => inspect(sp.dataset.s, "", null, false)));
   focusPending();
@@ -2090,7 +2092,7 @@ async function renderTrace(keep) {
   }));
   // A measure NAME opens the full analysis drawer (contribution bars,
   // tornado, goal-seek) — local engine only.
-  if (!SERVER) tree.querySelectorAll(".tname").forEach(el => el.addEventListener("click", () => {
+  tree.querySelectorAll(".tname").forEach(el => el.addEventListener("click", () => {
     const name = el.textContent.trim();
     const m = info.measures.find(x => x.name === name);
     if (!m) return;
@@ -2438,8 +2440,7 @@ if (SERVER) {
   throw new Error("client-mode boot complete"); // skip local-wasm init below
 }
 // ---- "explain this number": provenance inspector with drill-down ----
-let inspectStack = [];
-const cellDisplay = (name, member) => member ? `${name}[${member}]` : name;
+// (state hoisted before the client-mode fork in the shared prelude)
 function clearHl() { document.querySelectorAll("td.hl").forEach(td => td.classList.remove("hl")); }
 function highlightDeps(deps) {
   clearHl();
@@ -2488,13 +2489,31 @@ function gotoDef(file, line) {
   srcBox.setSelectionRange(start, start + (lines[line - 1] || "").length);
   srcBox.focus();
 }
-function inspect(key, member, t, drill) {
-  writeInput(member ? key + "|" + member : key);
-  if (exports.fml_explain(t === null ? -1 : Number(t)) !== 0) { setErr(readResult().error); return; }
-  const ex = readResult();
-  if (!drill) inspectStack = [];
-  inspectStack.push(ex);
-  renderInspect();
+async function fetchExplain(name, member, t) {
+  if (SERVER) {
+    const q = window.clientQs()
+      + `&name=${encodeURIComponent(name)}`
+      + (member ? `&member=${encodeURIComponent(member)}` : "")
+      + `&period=${t === null || t === undefined ? -1 : Number(t)}`;
+    const r = await (await fetch(SERVER + "/explain" + q)).json();
+    if (!r.ok) throw new Error(r.error);
+    return r;
+  }
+  writeInput(member ? name + "|" + member : name);
+  if (exports.fml_explain(t === null ? -1 : Number(t)) !== 0) {
+    throw new Error(readResult().error);
+  }
+  return readResult();
+}
+async function inspect(key, member, t, drill) {
+  try {
+    const ex = await fetchExplain(key, member, t);
+    if (!drill) inspectStack = [];
+    inspectStack.push(ex);
+    renderInspect();
+  } catch (e) {
+    toast(String(e.message || e), true);
+  }
 }
 function renderInspect() {
   document.getElementById("tornado")?.remove();
@@ -2544,7 +2563,7 @@ function renderInspect() {
     ${ex.body !== undefined ? `<div class="meta">= <code>${ex.body.length > 90 ? ex.body.slice(0, 90) + "…" : ex.body}</code></div>` : ""}
     ${termRows}
     ${depRows}
-    ${!ex.input && ex.period !== null ? '<button id="tornBtn">tornado ±10%</button> ' : ""}${!ex.input ? '<button id="gsBtn">goal seek…</button> ' : ""}<button id="rnBtn">rename…</button>${ex.body !== undefined ? ' <button id="fxBtn">edit formula…</button>' : ""}
+    ${!ex.input && ex.period !== null ? '<button id="tornBtn">tornado ±10%</button> ' : ""}${!ex.input ? '<button id="gsBtn">goal seek…</button> ' : ""}${!SERVER ? '<button id="rnBtn">rename…</button>' : ""}${ex.body !== undefined && (!SERVER || (window.clientMe && window.clientMe().role === "admin")) ? ' <button id="fxBtn">edit formula…</button>' : ""}
     <div id="gsForm"></div><div id="rnForm"></div><div id="fxForm"></div>`;
   document.body.appendChild(div);
   div.querySelector(".close").addEventListener("click", () => {
@@ -2581,20 +2600,47 @@ function renderInspect() {
       <select id="gsLever" style="font:inherit">${opts.map((o, i) => `<option value="${i}">${o.label}</option>`).join("")}</select>
       <button id="gsGo">solve</button></div><div id="gsOut" class="meta"></div>`;
     form.querySelector("#gsTarget").focus();
-    form.querySelector("#gsGo").addEventListener("click", () => {
+    form.querySelector("#gsGo").addEventListener("click", async () => {
       const target = Number(form.querySelector("#gsTarget").value);
       if (!Number.isFinite(target)) return;
       const o = opts[Number(form.querySelector("#gsLever").value)];
-      writeInput(`${o.key}|${o.member}|${ex.name}|${ex.member || ""}`);
       const t0 = performance.now();
-      const rc = exports.fml_goalseek(o.t, ex.period === null ? -1 : ex.period, target);
-      const r = readResult();
+      let r, rc = 0;
+      if (SERVER) {
+        r = await (await fetch(SERVER + "/goalseek", { method: "POST", body: JSON.stringify(Object.assign({
+          token: TOKEN, model: document.getElementById("modelSel").value,
+          input: o.key, in_member: o.member || "", in_period: o.t >= 0 ? String(o.t) : "",
+          output: ex.name, out_member: ex.member || "",
+          out_period: ex.period === null ? "" : String(ex.period),
+          target: String(target) },
+          window.clientVersion && window.clientVersion() ? { version: window.clientVersion() } : {})) })).json();
+        rc = r.ok ? 0 : 1;
+        if (!r.ok) r = { error: r.error };
+      } else {
+        writeInput(`${o.key}|${o.member}|${ex.name}|${ex.member || ""}`);
+        rc = exports.fml_goalseek(o.t, ex.period === null ? -1 : ex.period, target);
+        r = readResult();
+      }
       const out = form.querySelector("#gsOut");
       if (rc !== 0) { out.textContent = r.error; return; }
       out.innerHTML = `${o.label} = <b>${fmt(r.value)}</b> → ${cellDisplay(ex.name, ex.member)} = ${fmt(r.achieved)}
         <small style="opacity:.6">(${r.iterations} evals, ${((performance.now() - t0) * 1000).toFixed(0)} µs)</small>
         <button id="gsApply">apply</button>`;
-      out.querySelector("#gsApply").addEventListener("click", () => {
+      out.querySelector("#gsApply").addEventListener("click", async () => {
+        if (SERVER) {
+          const body = Object.assign({ token: TOKEN, model: document.getElementById("modelSel").value,
+            name: o.key, member: o.member || "", value: String(r.value) },
+            o.t >= 0 ? { period: String(o.t) } : {},
+            window.clientVersion && window.clientVersion() ? { version: window.clientVersion() } : {});
+          const pr = await (await fetch(SERVER + "/patch", { method: "POST", body: JSON.stringify(body) })).json();
+          if (!pr.ok) { toast(pr.error, true); return; }
+          await refreshFromServer(0, "goal-seek applied · #" + pr.seq);
+          toast(`applied · commit #${pr.seq}`);
+          document.getElementById("inspect")?.remove();
+          clearHl();
+          inspectStack = [];
+          return;
+        }
         writeInput(o.member ? o.key + "|" + o.member : o.key);
         const t1 = performance.now();
         if (exports.fml_patch(o.t, r.value) === 0) {
@@ -2615,7 +2661,7 @@ function renderInspect() {
       });
     });
   });
-  div.querySelector("#rnBtn").addEventListener("click", () => {
+  div.querySelector("#rnBtn")?.addEventListener("click", () => {
     const form = div.querySelector("#rnForm");
     form.innerHTML = `<div class="meta" style="margin-top:.4rem">rename to
       <input id="rnNew" style="width:10em;font:inherit" value="${ex.name}"> <button id="rnGo">apply everywhere</button>
@@ -2646,9 +2692,22 @@ function renderInspect() {
       <button id="fxGo">apply</button> <span id="fxOut"></span></div>`;
     const ta = form.querySelector("#fxBody");
     ta.focus();
-    form.querySelector("#fxGo").addEventListener("click", () => {
+    form.querySelector("#fxGo").addEventListener("click", async () => {
       const body = ta.value.trim();
       if (!body || body === ex.body) return;
+      if (SERVER) {
+        const r = await (await fetch(SERVER + "/formula", { method: "POST", body: JSON.stringify(Object.assign({
+          token: TOKEN, model: document.getElementById("modelSel").value,
+          name: ex.name, body },
+          window.clientVersion && window.clientVersion() ? { version: window.clientVersion() } : {})) })).json();
+        if (!r.ok) { form.querySelector("#fxOut").textContent = r.error; return; }
+        await refreshFromServer(0, "formula changed · #" + r.seq);
+        toast(`formula of ${ex.name} changed · commit #${r.seq}`);
+        document.getElementById("inspect")?.remove();
+        clearHl();
+        inspectStack = [];
+        return;
+      }
       writeInput(ex.name + "|" + body);
       if (exports.fml_replace_formula() !== 0) {
         form.querySelector("#fxOut").textContent = readResult().error;
@@ -2662,12 +2721,28 @@ function renderInspect() {
     });
   });
   const tb = div.querySelector("#tornBtn");
-  if (tb) tb.addEventListener("click", () => {
-    writeInput(ex.member ? ex.name + "|" + ex.member : ex.name);
+  if (tb) tb.addEventListener("click", async () => {
     const t0 = performance.now();
-    if (exports.fml_tornado(ex.period, 0.10) !== 0) { setErr(readResult().error); return; }
-    showTornado(cellDisplay(ex.name, ex.member) + " @ " + ex.label, readResult().bars,
-      (performance.now() - t0) * 1000);
+    try {
+      let bars;
+      if (SERVER) {
+        const q = window.clientQs()
+          + `&name=${encodeURIComponent(ex.name)}`
+          + (ex.member ? `&member=${encodeURIComponent(ex.member)}` : "")
+          + `&period=${ex.period}`;
+        const r = await (await fetch(SERVER + "/tornado" + q)).json();
+        if (!r.ok) throw new Error(r.error);
+        bars = r.bars;
+      } else {
+        writeInput(ex.member ? ex.name + "|" + ex.member : ex.name);
+        if (exports.fml_tornado(ex.period, 0.10) !== 0) throw new Error(readResult().error);
+        bars = readResult().bars;
+      }
+      showTornado(cellDisplay(ex.name, ex.member) + " @ " + ex.label, bars,
+        (performance.now() - t0) * 1000);
+    } catch (e) {
+      toast(String(e.message || e), true);
+    }
   });
   highlightDeps(ex.deps);
 }

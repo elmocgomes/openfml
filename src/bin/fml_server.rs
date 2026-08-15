@@ -670,6 +670,56 @@ fn main() {
                 // reading the source is already granted via /model.
                 respond(&mut stream, 200, &vs.session.model_info_json());
             }
+            ("GET", "/explain") => {
+                // The analysis drawer, server-evaluated (version-aware).
+                let Some(name) = get("name") else {
+                    respond(&mut stream, 400, &err_json("need name"));
+                    continue;
+                };
+                let member = get("member").filter(|m| !m.is_empty());
+                let p = get("period").and_then(|x| x.parse::<i64>().ok()).filter(|&x| x >= 0).map(|x| x as usize);
+                match openfml::wasm::explain_json(&mut vs.session, &name, member.as_deref(), p) {
+                    Ok(j) => respond(&mut stream, 200, &j),
+                    Err(e) => respond(&mut stream, 400, &err_json(&e)),
+                }
+            }
+            ("GET", "/tornado") => {
+                let Some(name) = get("name") else {
+                    respond(&mut stream, 400, &err_json("need name"));
+                    continue;
+                };
+                let member = get("member").filter(|m| !m.is_empty());
+                let p = get("period").and_then(|x| x.parse::<i64>().ok()).filter(|&x| x >= 0).map(|x| x as usize);
+                let rel = get("rel").and_then(|x| x.parse().ok()).unwrap_or(0.10);
+                match openfml::wasm::tornado_json(&mut vs.session, &name, member.as_deref(), p, rel) {
+                    Ok(j) => respond(&mut stream, 200, &j),
+                    Err(e) => respond(&mut stream, 400, &err_json(&e)),
+                }
+            }
+            ("POST", "/goalseek") => {
+                // Runtime-only solve (the session is restored); committing
+                // the answer is an ordinary gated /patch from the client.
+                let need = |k: &str| get(k).ok_or(format!("need {k}"));
+                let r = (|| -> Result<String, String> {
+                    let input = need("input")?;
+                    let output = need("output")?;
+                    let target: f64 = need("target")?.parse().map_err(|_| "target must be a number".to_string())?;
+                    let in_member = get("in_member").filter(|m| !m.is_empty());
+                    let out_member = get("out_member").filter(|m| !m.is_empty());
+                    let pin = get("in_period").and_then(|x| x.parse::<i64>().ok()).filter(|&x| x >= 0).map(|x| x as usize);
+                    let pout = get("out_period").and_then(|x| x.parse::<i64>().ok()).filter(|&x| x >= 0).map(|x| x as usize);
+                    let gs = vs.session.goal_seek(&input, in_member.as_deref(), pin,
+                        &output, out_member.as_deref(), pout, target)?;
+                    Ok(format!(
+                        "{{\"ok\":true,\"value\":{},\"achieved\":{},\"iterations\":{}}}",
+                        gs.value, gs.achieved, gs.iterations
+                    ))
+                })();
+                match r {
+                    Ok(j) => respond(&mut stream, 200, &j),
+                    Err(e) => respond(&mut stream, 400, &err_json(&e)),
+                }
+            }
             ("GET", "/seq") => {
                 respond(
                     &mut stream,

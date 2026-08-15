@@ -587,21 +587,8 @@ pub extern "C" fn fml_tornado(period: i32, rel: f64) -> i32 {
         }
     };
     let p = if period < 0 { None } else { Some(period as usize) };
-    match session.tornado(&name, member.as_deref(), p, rel) {
-        Ok(bars) => {
-            let mut out = String::from("{\"ok\":true,\"bars\":[");
-            for (k, (label, down, up)) in bars.iter().take(12).enumerate() {
-                if k > 0 {
-                    out.push(',');
-                }
-                out.push_str(&format!(
-                    "[\"{}\",{},{}]",
-                    json_escape(label),
-                    json_num(*down),
-                    json_num(*up)
-                ));
-            }
-            out.push_str("]}");
+    match tornado_json(session, &name, member.as_deref(), p, rel) {
+        Ok(out) => {
             set_result(out);
             0
         }
@@ -610,6 +597,26 @@ pub extern "C" fn fml_tornado(period: i32, rel: f64) -> i32 {
             1
         }
     }
+}
+
+/// Ranked ±rel sensitivity bars — shared by the wasm ABI and GET /tornado.
+pub fn tornado_json(
+    session: &mut Session,
+    name: &str,
+    member: Option<&str>,
+    p: Option<usize>,
+    rel: f64,
+) -> Result<String, String> {
+    let bars = session.tornado(name, member, p, rel)?;
+    let mut out = String::from("{\"ok\":true,\"bars\":[");
+    for (k, (label, down, up)) in bars.iter().take(12).enumerate() {
+        if k > 0 {
+            out.push(',');
+        }
+        out.push_str(&format!("[\"{}\",{},{}]", json_escape(label), json_num(*down), json_num(*up)));
+    }
+    out.push_str("]}");
+    Ok(out)
 }
 
 /// Goal-seek: find the input value that makes an output hit a target.
@@ -674,7 +681,27 @@ pub extern "C" fn fml_explain(period: i32) -> i32 {
         }
     };
     let p = if period < 0 { None } else { Some(period as usize) };
-    match session.explain(&name, member.as_deref(), p) {
+    match explain_json(session, &name, member.as_deref(), p) {
+        Ok(out) => {
+            set_result(out);
+            0
+        }
+        Err(e) => {
+            set_result(format!("{{\"ok\":false,\"error\":\"{}\"}}", json_escape(&e)));
+            1
+        }
+    }
+}
+
+/// Provenance JSON for one cell — shared by the wasm ABI and the
+/// server's GET /explain (the connected analysis drawer).
+pub fn explain_json(
+    session: &mut Session,
+    name: &str,
+    member: Option<&str>,
+    p: Option<usize>,
+) -> Result<String, String> {
+    match session.explain(name, member, p) {
         Ok(ex) => {
             let body = session
                 .body_text(&ex.name)
@@ -729,12 +756,10 @@ pub extern "C" fn fml_explain(period: i32) -> i32 {
                 ));
             }
             out.push_str("]}");
-            set_result(out);
-            0
+            Ok(out)
         }
         Err(e) => {
-            set_result(format!("{{\"ok\":false,\"error\":\"{}\"}}", json_escape(&e)));
-            1
+            Err(e)
         }
     }
 }
