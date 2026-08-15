@@ -3,7 +3,7 @@ model acme.industrial_budget
 // Each department fills its own file; finance owns formulas + process.
 
 calendar q = quarterly 2026-Q1 .. 2026-Q4
-dimension Line = tree { AllLines -> { Pipes, Valves, Fittings } }
+dimension Line = tree { AllLines -> { Metal -> { Pipes, Valves }, Fittings } } also { Machined -> { Valves, Fittings } }
 currency kEUR
 unit t, hc, mwh
 

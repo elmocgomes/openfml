@@ -28,6 +28,10 @@ pub struct DimInfo {
     /// Roll-up member name for tree dimensions; None for list dimensions.
     pub group: Option<String>,
     pub members: Vec<String>,
+    /// Every group as a named leaf-set: (name, leaf indices, depth).
+    /// groups[0] is the root; nested subgroups and `also { … }` alternate
+    /// hierarchies follow. Rolling up a group sums exactly its leaves.
+    pub groups: Vec<(String, Vec<usize>, usize)>,
     /// Functional currency per member; non-empty only for the functional dim.
     pub currencies: Vec<Unit>,
 }
@@ -230,8 +234,9 @@ pub struct Checked {
     pub dims: Vec<DimInfo>,
     /// member name → (dim id, member idx); unique across dimensions.
     pub member_lookup: HashMap<String, (usize, usize)>,
-    /// group name → dim id (tree dimensions only).
-    pub group_lookup: HashMap<String, usize>,
+    /// group name → (dim id, leaf indices) — a group rolls up exactly its
+    /// leaves (root, nested subgroup, or alternate hierarchy alike).
+    pub group_lookup: HashMap<String, (usize, Vec<usize>)>,
     /// The dimension carrying functional currencies, if any.
     pub functional_dim: Option<usize>,
     pub measures: Vec<MeasureInfo>,
@@ -419,7 +424,7 @@ pub fn check(model: &Model) -> Result<Checked, String> {
     // ---- dimensions --------------------------------------------------------
     let mut dims: Vec<DimInfo> = Vec::new();
     let mut member_lookup: HashMap<String, (usize, usize)> = HashMap::new();
-    let mut group_lookup: HashMap<String, usize> = HashMap::new();
+    let mut group_lookup: HashMap<String, (usize, Vec<usize>)> = HashMap::new();
     for d in &model.dimensions {
         if dims.iter().any(|x| x.name == d.name) {
             return Err(format!("dimension '{}' declared twice", d.name));
@@ -430,15 +435,38 @@ pub fn check(model: &Model) -> Result<Checked, String> {
                 return Err(format!("member '{}' appears in more than one dimension", m));
             }
         }
-        if let Some(g) = &d.group {
-            if group_lookup.insert(g.clone(), did).is_some() || member_lookup.contains_key(g) {
-                return Err(format!("group name '{}' collides with another name", g));
+        // Legacy single-group form (no groups list) keeps working.
+        let declared = if d.groups.is_empty() {
+            d.group
+                .clone()
+                .map(|g| (g, d.members.clone(), 0usize))
+                .into_iter()
+                .collect::<Vec<_>>()
+        } else {
+            d.groups.clone()
+        };
+        let mut groups: Vec<(String, Vec<usize>, usize)> = Vec::new();
+        for (gname, gleaves, depth) in &declared {
+            if member_lookup.contains_key(gname) || group_lookup.contains_key(gname) {
+                return Err(format!("group name '{}' collides with another name", gname));
             }
+            let idxs: Vec<usize> = gleaves
+                .iter()
+                .map(|l| {
+                    d.members
+                        .iter()
+                        .position(|m| m == l)
+                        .ok_or_else(|| format!("group '{gname}': unknown member '{l}'"))
+                })
+                .collect::<Result<_, _>>()?;
+            group_lookup.insert(gname.clone(), (did, idxs.clone()));
+            groups.push((gname.clone(), idxs, *depth));
         }
         dims.push(DimInfo {
             name: d.name.clone(),
             group: d.group.clone(),
             members: d.members.clone(),
+            groups,
             currencies: Vec::new(),
         });
     }
@@ -1622,7 +1650,7 @@ struct Pre<'a> {
     range_index: &'a HashMap<String, usize>,
     dims: &'a [DimInfo],
     member_lookup: &'a HashMap<String, (usize, usize)>,
-    group_lookup: &'a HashMap<String, usize>,
+    group_lookup: &'a HashMap<String, (usize, Vec<usize>)>,
 }
 
 impl<'a> Pre<'a> {
@@ -1721,7 +1749,8 @@ impl<'a> Pre<'a> {
                         for a in asgs.iter_mut() {
                             a[dim] = idx;
                         }
-                    } else if let Some(&dim) = self.group_lookup.get(mname) {
+                    } else if let Some((dim, leaves)) = self.group_lookup.get(mname) {
+                        let dim = *dim;
                         if !self.measures[target].dims.contains(&dim) {
                             return Err(format!(
                                 "line {}: '{}' is not over dimension {} — '[{}]' is invalid",
@@ -1730,7 +1759,7 @@ impl<'a> Pre<'a> {
                         }
                         let mut next = Vec::new();
                         for a in &asgs {
-                            for idx in 0..self.dims[dim].members.len() {
+                            for &idx in leaves {
                                 let mut a2 = a.clone();
                                 a2[dim] = idx;
                                 next.push(a2);
@@ -1922,7 +1951,7 @@ pub(crate) struct UnitEnv<'a> {
     pub index: &'a HashMap<String, usize>,
     pub dims: &'a [DimInfo],
     pub member_lookup: &'a HashMap<String, (usize, usize)>,
-    pub group_lookup: &'a HashMap<String, usize>,
+    pub group_lookup: &'a HashMap<String, (usize, Vec<usize>)>,
     pub functional_dim: Option<usize>,
     pub unit_reg: &'a HashMap<String, Unit>,
 }

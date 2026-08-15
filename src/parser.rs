@@ -346,6 +346,43 @@ impl Parser {
         Ok(crate::ast::DefDecl { name, params, ret, body, line })
     }
 
+    /// One tree group: `Name -> { item, … }` where an item is a leaf or a
+    /// nested subgroup. Records leaves in order and every group as a
+    /// (name, leaf names, depth) leaf-set.
+    fn tree_group(
+        &mut self,
+        leaves: &mut Vec<String>,
+        groups: &mut Vec<(String, Vec<String>, usize)>,
+        depth: usize,
+    ) -> Result<String, String> {
+        let g = self.expect_ident()?;
+        self.expect_sym("->")?;
+        self.expect_sym("{")?;
+        let slot = groups.len();
+        groups.push((g.clone(), Vec::new(), depth));
+        let mut mine: Vec<String> = Vec::new();
+        loop {
+            if matches!(self.peek(), Some(Tok::Ident(_)))
+                && matches!(self.peek_at(1), Some(Tok::Sym("->")))
+            {
+                let sub = self.tree_group(leaves, groups, depth + 1)?;
+                let sub_leaves =
+                    groups.iter().find(|(n, _, _)| n == &sub).map(|(_, l, _)| l.clone()).unwrap();
+                mine.extend(sub_leaves);
+            } else {
+                let m = self.expect_ident()?;
+                leaves.push(m.clone());
+                mine.push(m);
+            }
+            if !self.eat_sym(",") {
+                break;
+            }
+        }
+        self.expect_sym("}")?;
+        groups[slot].1 = mine;
+        Ok(g)
+    }
+
     fn expect_str(&mut self) -> Result<String, String> {
         match self.bump() {
             Some(Tok::Str(s)) => Ok(s),
@@ -462,21 +499,46 @@ impl Parser {
                     self.pos += 1;
                     let dname = self.expect_ident()?;
                     self.expect_sym("=")?;
-                    let (group, members) = if self.eat_kw("tree") {
+                    let (group, members, groups) = if self.eat_kw("tree") {
+                        // Multi-level: Group -> { leaf | Sub -> { … }, … }
+                        let mut leaves = Vec::new();
+                        let mut groups: Vec<(String, Vec<String>, usize)> = Vec::new();
                         self.expect_sym("{")?;
-                        let g = self.expect_ident()?;
-                        self.expect_sym("->")?;
-                        self.expect_sym("{")?;
-                        let mut ms = Vec::new();
-                        loop {
-                            ms.push(self.expect_ident()?);
-                            if !self.eat_sym(",") {
-                                break;
+                        let root = self.tree_group(&mut leaves, &mut groups, 0)?;
+                        self.expect_sym("}")?;
+                        // Alternate hierarchies over the SAME leaves:
+                        //   also { Premium -> { Valves, Fittings }, … }
+                        while self.peek_ident() == Some("also") {
+                            self.pos += 1;
+                            self.expect_sym("{")?;
+                            loop {
+                                let g = self.expect_ident()?;
+                                self.expect_sym("->")?;
+                                self.expect_sym("{")?;
+                                let mut ls = Vec::new();
+                                loop {
+                                    ls.push(self.expect_ident()?);
+                                    if !self.eat_sym(",") {
+                                        break;
+                                    }
+                                }
+                                self.expect_sym("}")?;
+                                for l in &ls {
+                                    if !leaves.contains(l) {
+                                        return Err(format!(
+                                            "line {}: alternate group '{g}' references '{l}', which is not a member of {dname}",
+                                            self.line()
+                                        ));
+                                    }
+                                }
+                                groups.push((g, ls, 1));
+                                if !self.eat_sym(",") {
+                                    break;
+                                }
                             }
+                            self.expect_sym("}")?;
                         }
-                        self.expect_sym("}")?;
-                        self.expect_sym("}")?;
-                        (Some(g), ms)
+                        (Some(groups[0].0.clone()), leaves, groups)
                     } else if self.eat_kw("list") {
                         self.expect_sym("{")?;
                         let mut ms = Vec::new();
@@ -487,7 +549,7 @@ impl Parser {
                             }
                         }
                         self.expect_sym("}")?;
-                        (None, ms)
+                        (None, ms, Vec::new())
                     } else {
                         return Err(format!(
                             "line {}: expected 'tree {{ Group -> {{ … }} }}' or 'list {{ … }}'",
@@ -497,11 +559,11 @@ impl Parser {
                     for m in &members {
                         self.dim_members.push(m.clone());
                     }
-                    if let Some(g) = &group {
+                    for (g, _, _) in &groups {
                         self.dim_members.push(g.clone());
                     }
                     self.dim_names.push(dname.clone());
-                    model.dimensions.push(DimensionDecl { name: dname, group, members });
+                    model.dimensions.push(DimensionDecl { name: dname, group, members, groups });
                 }
                 Some("functional") => {
                     self.pos += 1;

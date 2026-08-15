@@ -314,8 +314,14 @@ pub struct PeriodDecl {
 #[derive(Clone, Debug)]
 pub struct DimensionDecl {
     pub name: String,
+    /// Root roll-up group name (tree dimensions).
     pub group: Option<String>,
+    /// The LEAVES, in declaration order.
     pub members: Vec<String>,
+    /// Every group as a named leaf-set: (name, leaf names, depth).
+    /// groups[0] is the root; nested subgroups follow in declaration
+    /// order; `also { … }` alternate hierarchies come last (depth 1).
+    pub groups: Vec<(String, Vec<String>, usize)>,
 }
 
 /// `functional Entity = { PT_Co: EUR, US_Co: USD }`

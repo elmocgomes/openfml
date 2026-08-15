@@ -219,6 +219,7 @@
   tr.splash td { background:#fdf6ec; font-weight:600; }
   tr.splash td:first-child { background:var(--card); color:var(--warn); font-weight:700; }
   tr.splash td input { border-bottom:1px dashed var(--warn); background:rgba(176,96,0,.05); font-weight:600; }
+  tr.splash.sub td:first-child { padding-left:1.6rem; font-weight:600; opacity:.85; }
   tr.inp td:first-child { background: var(--card); color: var(--pri); font-weight:600; }
   td.neg { color: var(--bad); }
   td.chg { background: #d7e7ff; }
@@ -741,7 +742,7 @@ let PENDING_FOCUS = null;
 // next row's input in the same COLUMN — correct in both grid layouts.
 function inputHandle(n) {
   return n.dataset.splash !== undefined
-    ? { splash: n.dataset.splash, t: n.dataset.t }
+    ? { splash: n.dataset.splash, group: n.dataset.group || "", t: n.dataset.t }
     : { key: n.dataset.key, member: n.dataset.member, t: n.dataset.t };
 }
 function neighborOf(inp, dir) {
@@ -766,7 +767,7 @@ function focusPending() {
   const h = PENDING_FOCUS;
   PENDING_FOCUS = null;
   const inp = h.splash !== undefined
-    ? document.querySelector(`td input[data-splash="${CSS.escape(h.splash)}"][data-t="${h.t}"]`)
+    ? document.querySelector(`td input[data-splash="${CSS.escape(h.splash)}"][data-group="${CSS.escape(h.group || "")}"][data-t="${h.t}"]`)
     : document.querySelector(
         `td input[data-key="${CSS.escape(h.key)}"][data-member="${CSS.escape(h.member || "")}"][data-t="${h.t}"]`);
   if (inp) { inp.focus(); inp.select(); }
@@ -835,8 +836,18 @@ function commitCell(inp, dir) {
 // current values (equal split when the members sum to zero). Entry codes
 // apply to the TOTAL: "24k/>" splits 24k evenly across periods, each
 // period then distributing to members.
+function groupLeavesOf(groupName, key) {
+  if (!groupName) return null; // no group → every member
+  for (const d of lastState?.dims || []) {
+    const g = (d.groups || []).find(x => x.name === groupName);
+    if (g) return g.leaves;
+  }
+  return null;
+}
 function commitSplash(inp, dir) {
   const key = inp.dataset.splash;
+  const grp = inp.dataset.group || "";
+  const leaves = groupLeavesOf(grp, key);
   const raw = inp.value;
   const cur = Number(inp.defaultValue) || 0;
   const move = dir ? (() => {
@@ -864,7 +875,7 @@ function commitSplash(inp, dir) {
   // Period targets for the TOTAL (reuse the rightward machinery over the
   // splash row itself).
   const row = [...document.querySelectorAll(`td input[data-splash="${CSS.escape(key)}"]`)]
-    .filter(x => Number(x.dataset.t) >= Number(inp.dataset.t))
+    .filter(x => (x.dataset.group || "") === grp && Number(x.dataset.t) >= Number(inp.dataset.t))
     .sort((a, b) => Number(a.dataset.t) - Number(b.dataset.t));
   const curAt = t => Number(row.find(c => Number(c.dataset.t) === t)?.defaultValue) || 0;
   let totals;
@@ -889,8 +900,9 @@ function commitSplash(inp, dir) {
   // Distribute each period total across the member cells.
   const perMember = new Map(); // member → [[t, v]]
   for (const [t, total] of totals || []) {
-    const cells = [...document.querySelectorAll(
+    let cells = [...document.querySelectorAll(
       `td input[data-key="${CSS.escape(key)}"][data-t="${t}"]`)];
+    if (leaves) cells = cells.filter(c => leaves.includes(c.dataset.member));
     if (!cells.length) continue;
     const sum = cells.reduce((a, c) => a + (Number(c.defaultValue) || 0), 0);
     for (const c of cells) {
@@ -992,17 +1004,28 @@ function render(r) {
       splashDone.add(s.key);
       const members = r.series.filter(x => x.key === s.key);
       if (members.length > 1) {
-        const totMax = Math.max(0, ...s.vals.map((_, t) =>
-          Math.abs(members.reduce((a, m) => a + (m.vals[t] || 0), 0))));
-        html += `<tr class="splash"><td title="Σ ${s.key} — type here to splash down">Σ ${s.key}<span class="unit">${s.unit}</span></td>`;
-        s.vals.forEach((_, t) => {
-          const tot = members.reduce((a, m) => a + (m.vals[t] || 0), 0);
-          const ok = members.every(m => cellEditable(m, t));
-          html += ok
-            ? `<td><input autocomplete="off" data-splash="${s.key}" data-t="${t}" value="${tot}"></td>`
-            : `<td class="${tot < 0 ? "neg" : ""}">${fmtCell(tot, s.unit, totMax)}</td>`;
-        });
-        html += "</tr>";
+        // One Σ row per GROUP: root, nested subgroups, alternates — each
+        // splashes over exactly its leaves.
+        const dim = (r.dims || []).find(d => d.members.includes(members[0].member));
+        const groups = dim && dim.groups && dim.groups.length
+          ? dim.groups
+          : [{ name: "", depth: 0, leaves: members.map(m => m.member) }];
+        for (const g of groups) {
+          const rows = members.filter(m => g.leaves.includes(m.member));
+          if (rows.length < 2) continue;
+          const totMax = Math.max(0, ...s.vals.map((_, t) =>
+            Math.abs(rows.reduce((a, m) => a + (m.vals[t] || 0), 0))));
+          const label = g.depth === 0 || !g.name ? `Σ ${s.key}` : `Σ ${s.key} · ${g.name}`;
+          html += `<tr class="splash${g.depth > 0 ? " sub" : ""}"><td title="${label} — type here to splash down over ${g.leaves.join(", ")}">${label}<span class="unit">${s.unit}</span></td>`;
+          s.vals.forEach((_, t) => {
+            const tot = rows.reduce((a, m) => a + (m.vals[t] || 0), 0);
+            const ok = rows.every(m => cellEditable(m, t));
+            html += ok
+              ? `<td><input autocomplete="off" data-splash="${s.key}" data-group="${g.name}" data-t="${t}" value="${tot}"></td>`
+              : `<td class="${tot < 0 ? "neg" : ""}">${fmtCell(tot, s.unit, totMax)}</td>`;
+          });
+          html += "</tr>";
+        }
       }
     }
     const cls = s.input ? "inp" : "";
@@ -1048,9 +1071,14 @@ function render(r) {
   const pT = Math.min(PIVOT.t || 0, r.periods.length - 1);
   if (pivotDim) {
     const mset = new Set(pivotDim.members);
+    // Tree-aware columns: leaves, then Σ per subgroup/alternate, root last.
+    const pgroups = (pivotDim.groups && pivotDim.groups.length
+      ? [...pivotDim.groups.filter(g => g.depth > 0), ...pivotDim.groups.filter(g => g.depth === 0)]
+      : [{ name: pivotDim.name, depth: 0, leaves: pivotDim.members }]);
     let ph = `<thead><tr><th>measure · ${r.periods[pT]}</th>`
       + pivotDim.members.map(m => `<th>${m}</th>`).join("")
-      + `<th>Σ ${pivotDim.name}</th></tr></thead><tbody>`;
+      + pgroups.map(g => `<th>Σ ${g.name}</th>`).join("")
+      + `</tr></thead><tbody>`;
     const seen = new Set();
     for (const s of r.series) {
       if (seen.has(s.key)) continue;
@@ -1077,13 +1105,18 @@ function render(r) {
             ph += `<td class="${torn}${v !== null && v < 0 ? " neg" : ""}"${tdata}>${fmtCell(v, s.unit, rowMax)}</td>`;
           }
         }
-        const tot = group.reduce((a, x) => a + (x.vals[pT] || 0), 0);
-        ph += s.input && allEd
-          ? `<td><input autocomplete="off" data-splash="${s.key}" data-t="${pT}" value="${tot}"></td>`
-          : `<td class="${tot < 0 ? "neg" : ""}" style="font-weight:600">${fmtCell(tot, s.unit, rowMax)}</td>`;
+        for (const g of pgroups) {
+          const rows2 = group.filter(x => g.leaves.includes(x.member));
+          const tot = rows2.reduce((a, x) => a + (x.vals[pT] || 0), 0);
+          const gEd = s.input && rows2.length > 0 && rows2.every(x => cellEditable(x, pT));
+          ph += gEd
+            ? `<td><input autocomplete="off" data-splash="${s.key}" data-group="${g.depth === 0 ? "" : g.name}" data-t="${pT}" value="${tot}"></td>`
+            : `<td class="${tot < 0 ? "neg" : ""}" style="font-weight:600">${fmtCell(tot, s.unit, rowMax)}</td>`;
+        }
       } else {
-        // undimensioned: members blank, the value lives in the Σ column
-        ph += pivotDim.members.map(() => `<td class="out">·</td>`).join("");
+        // undimensioned: members blank, the value lives in the LAST column
+        ph += pivotDim.members.map(() => `<td class="out">·</td>`).join("")
+          + pgroups.slice(0, -1).map(() => `<td class="out">·</td>`).join("");
         const row = group[0];
         const v = row.vals[pT];
         const rowMax = Math.max(0, ...row.vals.filter(x => x !== null).map(Math.abs));
@@ -1523,9 +1556,15 @@ async function renderModel() {
     <div class="mnote">the master file includes each department's fragment; a fragment's numbers live in ITS file — grid edits write back to the owner</div>
     <div class="ftree"><ul>${roots}${orphans}</ul></div></div>`;
   const dimsCard = info.dims.length ? `<div class="mcard"><h3>Dimensions & roll-up</h3>
-    ${info.dims.map(d => `<div class="dimrow"><b>${escM(d.name)}</b> &nbsp;
-      ${d.group ? `<span class="chip roll">${escM(d.group)} = Σ</span> ⟵ ` : ""}
-      ${d.members.map(m => `<span class="chip">${escM(m)}</span>`).join("")}</div>`).join("")}
+    ${info.dims.map(d => {
+      const gs = d.groups && d.groups.length ? d.groups : (d.group ? [{ name: d.group, depth: 0, leaves: d.members }] : []);
+      const rows = gs.length
+        ? gs.map(g => `<div class="dimrow" style="padding-left:${g.depth * 1.2}rem">
+            <span class="chip roll">${escM(g.name)} = Σ</span> ⟵
+            ${g.leaves.map(m => `<span class="chip">${escM(m)}</span>`).join("")}</div>`).join("")
+        : `<div class="dimrow">${d.members.map(m => `<span class="chip">${escM(m)}</span>`).join("")}</div>`;
+      return `<div class="dimrow"><b>${escM(d.name)}</b></div>${rows}`;
+    }).join("")}
     ${info.correlations.length ? `<div class="mnote" style="margin-top:.5rem"><b>correlations</b> —
       ${info.correlations.map(([a, b, r]) => `${escM(a)} ⇄ ${escM(b)} (ρ=${r})`).join(" · ")}</div>` : ""}</div>` : "";
   let accessCard;

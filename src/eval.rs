@@ -73,12 +73,12 @@ impl<'a> Ctx<'a> {
                         for a in asgs.iter_mut() {
                             a[dim] = idx;
                         }
-                    } else if let Some(&dim) = self.c.group_lookup.get(mname) {
+                    } else if let Some((dim, leaves)) = self.c.group_lookup.get(mname) {
                         let mut next = Vec::new();
                         for a in &asgs {
-                            for idx in 0..self.c.dims[dim].members.len() {
+                            for &idx in leaves {
                                 let mut a2 = a.clone();
-                                a2[dim] = idx;
+                                a2[*dim] = idx;
                                 next.push(a2);
                             }
                         }

@@ -1733,6 +1733,11 @@ impl Session {
                 "'{dim}' carries functional currencies — add the member and its currency mapping in the source"
             ));
         }
+        if self.checked.dims[did].groups.len() > 1 {
+            return Err(format!(
+                "'{dim}' has nested or alternate groups — add the member (and its group placement) in the source"
+            ));
+        }
         let ok_ident = crate::lexer::lex(member)
             .ok()
             .map(|t| t.len() == 1 && matches!(t[0].tok, crate::lexer::Tok::Ident(_)))
@@ -2163,6 +2168,25 @@ impl Session {
                             "members".into(),
                             J::A(d.members.iter().map(|m| J::S(m.clone())).collect()),
                         ),
+                        (
+                            "groups".into(),
+                            J::A(d.groups
+                                .iter()
+                                .map(|(g, leaves, depth)| {
+                                    J::O(vec![
+                                        ("name".into(), J::S(g.clone())),
+                                        ("depth".into(), J::N(*depth as f64)),
+                                        (
+                                            "leaves".into(),
+                                            J::A(leaves
+                                                .iter()
+                                                .map(|&i| J::S(d.members[i].clone()))
+                                                .collect()),
+                                        ),
+                                    ])
+                                })
+                                .collect()),
+                        ),
                     ])
                 })
                 .collect(),
@@ -2275,8 +2299,8 @@ impl Session {
         for (name, &(dim, _)) in &self.checked.member_lookup {
             out.push((name.clone(), "member", self.checked.dims[dim].name.clone()));
         }
-        for (name, &dim) in &self.checked.group_lookup {
-            out.push((name.clone(), "group", self.checked.dims[dim].name.clone()));
+        for (name, (dim, _)) in &self.checked.group_lookup {
+            out.push((name.clone(), "group", self.checked.dims[*dim].name.clone()));
         }
         for d in &self.checked.dims {
             out.push((d.name.clone(), "dimension", String::new()));
@@ -2556,12 +2580,12 @@ impl Session {
                         for a in asgs.iter_mut() {
                             a[dim] = idx;
                         }
-                    } else if let Some(&dim) = self.checked.group_lookup.get(mname) {
+                    } else if let Some((dim, leaves)) = self.checked.group_lookup.get(mname) {
                         let mut next = Vec::new();
                         for a in &asgs {
-                            for idx in 0..self.checked.dims[dim].members.len() {
+                            for &idx in leaves {
                                 let mut a2 = a.clone();
-                                a2[dim] = idx;
+                                a2[*dim] = idx;
                                 next.push(a2);
                             }
                         }
@@ -2743,13 +2767,13 @@ impl Session {
                         for a in asgs.iter_mut() {
                             a[dim] = idx;
                         }
-                    } else if let Some(&dim) = self.checked.group_lookup.get(mname) {
+                    } else if let Some((dim, leaves)) = self.checked.group_lookup.get(mname) {
                         rolled = true;
                         let mut next = Vec::new();
                         for a in &asgs {
-                            for idx in 0..self.checked.dims[dim].members.len() {
+                            for &idx in leaves {
                                 let mut a2 = a.clone();
-                                a2[dim] = idx;
+                                a2[*dim] = idx;
                                 next.push(a2);
                             }
                         }

@@ -83,6 +83,19 @@ pub fn dump_state(session: &mut Session, stats_json: &str, include_src: bool) ->
             }
             out.push_str(&format!("\"{}\"", json_escape(m)));
         }
+        out.push_str("],\"groups\":[");
+        for (j, (g, leaves, depth)) in d.groups.iter().enumerate() {
+            if j > 0 {
+                out.push(',');
+            }
+            let ls: Vec<String> =
+                leaves.iter().map(|&i| format!("\"{}\"", json_escape(&d.members[i]))).collect();
+            out.push_str(&format!(
+                "{{\"name\":\"{}\",\"depth\":{depth},\"leaves\":[{}]}}",
+                json_escape(g),
+                ls.join(",")
+            ));
+        }
         out.push_str("]}");
     }
     out.push_str("],\"periods\":[");
