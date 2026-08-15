@@ -38,10 +38,7 @@
     font-weight: 650; font-size: 15px; letter-spacing: .01em; }
   #side .logo small { display: block; font-weight: 500; color: oklch(62% .02 258);
     font-size: 10px; letter-spacing: .12em; text-transform: uppercase; margin-top: .2rem; }
-  #side select { margin: .15rem .9rem; width: calc(100% - 1.8rem); background: var(--navy2);
-    color: oklch(96% .005 255); border: 1px solid var(--navy3); border-radius: 6px;
-    padding: .38rem .5rem; font: inherit; font-size: 12.5px; }
-  #side select#verSel { color: oklch(85% .07 85); font-size: 12px; padding: .28rem .5rem; }
+
   #side nav { margin-top: .8rem; flex: 1; }
   #side nav a { display: flex; align-items: center; gap: .6rem; margin: .1rem .55rem;
     padding: .44rem .6rem; border-radius: 6px; color: oklch(78% .014 258);
@@ -69,6 +66,11 @@
   .pill.submitted { background: var(--warnbg); color: var(--warn); }
   .pill.locked { background: var(--badbg); color: var(--bad); }
   #syncdot { margin-left: auto; color: var(--faint); font-size: 11.5px; }
+  #topbar .ctx { display: flex; align-items: center; gap: .45rem; margin-left: .4rem; }
+  #topbar .ctx .sep { color: var(--faint); }
+  #topbar .ctx select { border: 1px solid var(--line); border-radius: 6px;
+    background: var(--card); padding: .26rem .45rem; font-size: 12.5px; max-width: 16em; }
+  #topbar #verSel { color: var(--warn); }
   #content { flex: 1; overflow: auto; padding: 1.3rem 1.5rem; }
 
   /* ---- dashboard ---- */
@@ -227,16 +229,12 @@
 </div>
 
 <aside id="side" style="display:none">
-  <div class="logo">Budget Portal<small>powered by OpenFML</small></div>
-  <select id="modelSel"></select>
-  <select id="verSel" style="display:none"></select>
+  <div class="logo">Budget Portal<small>powered by fml</small></div>
   <nav>
-    <a data-p="dash" class="on"><span class="ic">◧</span>Dashboard</a>
-    <a data-p="entry"><span class="ic">▦</span>Budget entry</a>
-    <a data-p="formulas"><span class="ic">⇄</span>Formulas</a>
-    <a data-p="process"><span class="ic">◷</span>Workflow</a>
-    <a data-p="audit" id="navAudit" style="display:none"><span class="ic">☰</span>Audit log</a>
-    <a data-p="admin" id="navAdmin" style="display:none"><span class="ic">⚙</span>Administration</a>
+    <a data-p="dash" class="on"><span class="ic">⌂</span>Home</a>
+    <a data-p="entry"><span class="ic">▦</span>Plan</a>
+    <a data-p="formulas"><span class="ic">⊙</span>Analyze</a>
+    <a data-p="govern"><span class="ic">✓</span>Govern</a>
   </nav>
   <div class="whoami"><div class="avatar" id="avatar">?</div>
     <div><div class="nm" id="whoNm">…</div><div class="rl" id="whoRl">…</div></div></div>
@@ -244,7 +242,9 @@
 
 <div id="maincol" style="display:none">
   <div id="topbar">
-    <span id="crumb">Dashboard</span>
+    <span id="crumb">Home</span>
+    <span class="ctx"><select id="modelSel"></select>
+      <span class="sep">›</span><select id="verSel" style="display:none"></select></span>
     <span class="pill open" id="roundPill">round open</span>
     <span id="syncdot">●</span>
   </div>
@@ -263,6 +263,7 @@ let TOKEN = P.get("token") || localStorage.getItem("fml:portal:token") || "";
 let ME = null, MODEL = P.get("model") || "", MODELS = [], STATE = null, PROC = { locked: false, submitted: [] };
 let VER = P.get("version") || "";
 let GRANTS = [], PAGE = "dash", lastSeq = -1;
+const LEGACY_PAGE = { process: "govern", audit: "govern", admin: "govern" };
 const $ = id => document.getElementById(id);
 const qs = () => `?token=${encodeURIComponent(TOKEN)}&model=${encodeURIComponent(MODEL)}`
   + (VER ? `&version=${encodeURIComponent(VER)}` : "");
@@ -299,8 +300,6 @@ async function boot() {
   $("whoNm").textContent = ME.user;
   if (mi.version) document.querySelector("#side .logo small").textContent = `powered by OpenFML v${mi.version}`;
   $("whoRl").textContent = `${ME.dept} · ${ME.role}`;
-  $("navAudit").style.display = ME.role === "admin" ? "" : "none";
-  $("navAdmin").style.display = ME.role === "admin" ? "" : "none";
   const sel = $("modelSel");
   sel.innerHTML = MODELS.map(m => `<option${m.model === MODEL ? " selected" : ""}>${esc(m.model)}</option>`).join("");
   sel.onchange = async () => { MODEL = sel.value; VER = ""; await refresh(); await loadVersions(); renderPage(); };
@@ -384,10 +383,26 @@ function renderRound() {
 
 // ---- pages ----------------------------------------------------------------
 function renderPage() {
-  $("crumb").innerHTML = { dash: "Dashboard", entry: "Budget entry", formulas: "Formulas",
-    process: "Workflow", audit: "Audit log", admin: "Administration" }[PAGE] + ` <small>· ${esc(MODEL)}</small>`;
-  ({ dash: pageDash, entry: pageEntry, formulas: pageFormulas, process: pageProcess,
-     audit: pageAudit, admin: pageAdmin })[PAGE]();
+  PAGE = LEGACY_PAGE[PAGE] || PAGE;
+  $("crumb").innerHTML = ({ dash: "Home", entry: "Plan", formulas: "Analyze",
+    govern: "Govern" }[PAGE] || "Home") + ` <small>· ${esc(MODEL)}</small>`;
+  ({ dash: pageDash, entry: pageEntry, formulas: pageFormulas, govern: pageGovern })[PAGE]();
+}
+
+// Govern: the round, the audit trail, people/versions/persistence — one
+// place, sections gated by role.
+async function pageGovern() {
+  $("content").innerHTML = `<div id="gvProcess"></div><div id="gvAudit"></div><div id="gvAdmin"></div>`;
+  pageProcess($("gvProcess"));
+  if (ME.role === "admin") {
+    await pageAudit($("gvAudit"));
+    await pageAdmin($("gvAdmin"));
+  } else {
+    $("gvAudit").innerHTML = `<h2 class="sec">Your access</h2>
+      <div class="card"><div class="mnote"><b>${esc(ME.user)}</b> · ${esc(ME.dept)} · ${esc(ME.role)} —
+      you may write the input cells finance granted to ${esc(ME.dept)}; the audit trail and
+      administration are finance-only.</div></div>`;
+  }
 }
 
 function spark(vals) {
@@ -472,19 +487,24 @@ function pageEntry() {
     });
     rows += "</tr>";
   }
+  const canSubmit = !VER && !PROC.submitted.includes(ME.dept) && ME.role !== "viewer" && !PROC.locked;
   $("content").innerHTML = `
     <div class="toolbar">
-      ${!PROC.submitted.includes(ME.dept) && ME.role !== "viewer" && !PROC.locked
-        ? `<button class="act" id="submitBtn">Submit ${esc(ME.dept)}'s numbers</button>` : ""}
       <span class="legend">editable<span class="sw" style="background:var(--amber)"></span>
-        computed<span class="sw" style="background:#fff"></span></span>
+        computed<span class="sw" style="background:var(--card)"></span></span>
       <span class="legend" id="entryHelp" style="cursor:help;border:1px solid var(--line);border-radius:999px;padding:.15rem .6rem">⌨ entry codes</span>
       <span class="legend" id="fmtBtn" style="cursor:pointer;border:1px solid var(--line);border-radius:999px;padding:.15rem .6rem">Aa format${FMT.scale > 1 ? ` · ×${FMT.scale === 1e6 ? "1m" : "1k"}` : ""}</span>
       <div id="fmtPop" style="display:none"></div>
     </div>
     <div class="gridwrap"><table class="grid">
       <thead><tr><th>Measure</th>${s.periods.map(p => `<th>${esc(p)}</th>`).join("")}</tr></thead>
-      <tbody>${rows}</tbody></table></div>`;
+      <tbody>${rows}</tbody></table></div>
+    ${canSubmit ? `<div class="toolbar" style="justify-content:flex-end">
+      <span class="mnote">done entering? submitting hands ${esc(ME.dept)}'s numbers to finance
+      and freezes your cells until reopened</span>
+      <button class="act" id="submitBtn">Submit ${esc(ME.dept)}'s numbers</button></div>`
+    : VER ? `<div class="toolbar"><span class="mnote">working in <b>version · ${esc(VER)}</b> —
+      edits land in its own signed log; the budget of record is untouched</span></div>` : ""}`;
   $("submitBtn")?.addEventListener("click", async () => {
     const r = await post("/submit");
     if (!r.ok) { toast(r.error, true); return; }
@@ -935,7 +955,8 @@ async function pageFormulas() {
   }));
 }
 
-function pageProcess() {
+function pageProcess(host) {
+  host = host || $("content");
   const depts = new Set(PROC.submitted);
   depts.add(ME.dept);
   const cards = [...depts].map(d => {
@@ -946,7 +967,8 @@ function pageProcess() {
       ${d === ME.dept && !sub && ME.role !== "viewer" && !PROC.locked ? `<div style="margin-top:.6rem"><button class="act" id="pSubmit">Submit</button></div>` : ""}
     </div>`;
   }).join("");
-  $("content").innerHTML = `
+  host.innerHTML = `
+    <h2 class="sec" style="margin-top:0">The round</h2>
     <div class="depts">${cards}</div>
     <h2 class="sec">Round control</h2>
     <div class="card"><div class="toolbar" style="margin:0">
@@ -979,7 +1001,8 @@ function pageProcess() {
   });
 }
 
-async function pageAudit() {
+async function pageAudit(host) {
+  host = host || $("content");
   const r = await get("/log" + qs());
   const rows = (r.log || "").trim().split("\n").filter(Boolean).map(l => {
     const f = l.split("\t");
@@ -991,7 +1014,7 @@ async function pageAudit() {
     return `<tr><td>${seq}</td><td>${when}</td><td>${esc(who)}</td>
       <td class="k-${kind}">${kind}</td><td class="num" style="text-align:left">${esc(what)}</td></tr>`;
   }).filter(Boolean).reverse().join("");
-  $("content").innerHTML = `
+  host.innerHTML = `
     <div class="card" style="margin-bottom:1rem;color:var(--mut);font-size:.85rem">
       Every entry is signed over the previous one — edited, deleted or reordered history refuses to load.</div>
     <div class="gridwrap"><table class="list">
@@ -999,13 +1022,14 @@ async function pageAudit() {
       <tbody>${rows || "<tr><td colspan=5>no events this round</td></tr>"}</tbody></table></div>`;
 }
 
-async function pageAdmin() {
+async function pageAdmin(host) {
+  host = host || $("content");
   const u = await get("/users?token=" + encodeURIComponent(TOKEN));
   const rows = (u.users || []).map(x => `
     <tr><td>${esc(x.user)}</td><td style="text-transform:capitalize">${esc(x.dept)}</td>
       <td><span class="rolebadge ${x.role}">${x.role}</span></td>
       <td><button class="act ghost mint" data-u="${esc(x.user)}">Issue token</button></td></tr>`).join("");
-  $("content").innerHTML = `
+  host.innerHTML = `
     <h2 class="sec" style="margin-top:0">People & access</h2>
     <div class="gridwrap"><table class="list">
       <thead><tr><th>User</th><th>Department</th><th>Role</th><th></th></tr></thead>

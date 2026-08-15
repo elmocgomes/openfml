@@ -61,10 +61,7 @@
     font-weight: 650; font-size: 15px; letter-spacing: .01em; }
   #side .logo small { display: block; font-weight: 500; color: oklch(62% .02 258);
     font-size: 10px; letter-spacing: .12em; text-transform: uppercase; margin-top: .2rem; }
-  #modelSel, #verSel { margin: .15rem .9rem; width: calc(100% - 1.8rem);
-    background: var(--navy2); color: oklch(96% .005 255); border: 1px solid var(--navy3);
-    border-radius: var(--r-ctl); padding: .38rem .5rem; font-size: 12.5px; }
-  #verSel { color: oklch(85% .07 85); font-size: 12px; padding: .28rem .5rem; }
+
   #side nav { margin-top: .8rem; flex: 1; }
   #side nav a { display: flex; align-items: center; gap: .6rem; margin: .1rem .55rem;
     padding: .42rem .6rem; border-radius: var(--r-ctl); color: oklch(78% .014 258);
@@ -83,7 +80,16 @@
   /* ---- topbar ---- */
   #maincol { flex: 1; display: flex; flex-direction: column; min-width: 0; }
   #topbar { background: var(--card); border-bottom: 1px solid var(--line);
-    padding: 0 1.4rem; height: 46px; display: flex; align-items: center; gap: .9rem; }
+    padding: 0 1.4rem; height: 46px; display: flex; align-items: center; gap: .7rem; }
+  #topbar .ctx { display: flex; align-items: center; gap: .45rem; margin-left: .5rem; }
+  #topbar .ctx .sep { color: var(--faint); }
+  #topbar .ctx select { border: 1px solid var(--line); border-radius: var(--r-ctl);
+    background: var(--card); padding: .26rem .45rem; font-size: 12.5px; max-width: 15em; }
+  #topbar #verSel { color: var(--warn); }
+  .pill { padding: .18rem .7rem; border-radius: 999px; font-size: 11.5px; font-weight: 650; }
+  .pill.open { background: var(--okbg); color: var(--ok); }
+  .pill.submitted { background: var(--warnbg); color: var(--warn); }
+  .pill.locked { background: var(--badbg); color: var(--bad); }
   #crumb { font-weight: 650; font-size: 15px; letter-spacing: -.01em; }
   #scenTag { background: var(--warnbg); color: var(--warn); border-radius: 999px;
     padding: .18rem .7rem; font-size: 11.5px; font-weight: 650; }
@@ -103,6 +109,27 @@
   #asserts .pass { color: var(--ok); }
   #asserts .fail { color: var(--bad); background: var(--badbg); font-weight: 650; }
   .pass::before { content: "✓ "; } .fail::before { content: "✗ "; }
+
+  /* ---- model zone sub-tabs ---- */
+  #modelTabs button[data-mt] { border: 0; background: transparent; color: var(--mut);
+    font-weight: 500; border-bottom: 2px solid transparent; border-radius: 0;
+    padding: .4rem .2rem; margin-right: .8rem; }
+  #modelTabs button[data-mt]:hover { background: transparent; color: var(--ink); }
+  #modelTabs button[data-mt].on { color: var(--pri); border-bottom-color: var(--pri);
+    font-weight: 650; }
+  /* ---- sim strip inside Plan ---- */
+  #simStrip { border-bottom: 1px solid var(--line); background: var(--bg);
+    max-height: 46vh; overflow: auto; padding: .9rem 1.4rem; }
+  #simStrip .mcard { margin-bottom: .8rem; }
+  /* ---- plan footer: finish the entry, then submit ---- */
+  #planFoot { border-top: 1px solid var(--line); background: var(--card);
+    padding: .55rem 1.4rem; display: flex; align-items: center; gap: 1rem; }
+  #planFoot button.primary { background: var(--pri); border-color: var(--pri);
+    color: oklch(98% .005 255); font-weight: 600; }
+  #planFoot button.primary:hover { background: oklch(44% .15 262); }
+  #planFoot { margin-left: 0; }
+  #planFoot .mnote { margin: 0; }
+  #planFoot button { margin-left: auto; }
 
   /* ---- pages & control bars ---- */
   #pages { flex: 1; min-height: 0; position: relative; }
@@ -374,12 +401,14 @@
   #hovertip .hx { margin-top: .35rem; }
   #hovertip .hv { font-family: var(--mono); font-variant-numeric: tabular-nums; font-weight: 650; }
 
-  /* ---- inspector & tornado ---- */
-  #inspect, #tornado { position: fixed; right: 1rem; bottom: 3rem; background: var(--card);
+  /* ---- the analysis DRAWER: docked right, every page ---- */
+  #inspect { position: fixed; right: 0; top: 46px; bottom: 0; width: 400px;
+    background: var(--card); border-left: 1px solid var(--line);
+    box-shadow: -8px 0 24px oklch(25% .02 260 / .08); z-index: 5;
+    padding: .9rem 1.1rem; overflow: auto; }
+  #tornado { position: fixed; right: 412px; bottom: 1rem; background: var(--card);
     border: 1px solid var(--line); border-radius: var(--r-panel); padding: .85rem 1rem;
-    box-shadow: var(--sh-lg); z-index: 5; }
-  #tornado { max-width: 420px; z-index: 6; }
-  #inspect { max-width: 440px; max-height: 60vh; overflow: auto; }
+    box-shadow: var(--sh-lg); z-index: 6; max-width: 420px; }
   #inspect h3 { margin: .1rem 0 .3rem; font-size: 13.5px; font-family: var(--sans); font-weight: 650; }
   #inspect .crumb { font-size: 11.5px; color: var(--mut); margin-bottom: .15rem; }
   #inspect .meta { font-size: 12px; color: var(--mut); margin: .12rem 0; }
@@ -415,21 +444,26 @@
 <body>
 <aside id="side">
   <div class="logo">OpenFML<small>modelling studio</small></div>
-  <select id="modelSel" title="Model"></select>
-  <select id="verSel" title="Version" style="display:none;margin-top:.3rem;font-size:.85rem;color:#ffd9a0"></select>
   <nav>
-    <a data-p="overview" class="on"><span class="ic"><svg viewBox="0 0 16 16"><rect x="1.5" y="1.5" width="13" height="13" rx="2"/><path d="M1.5 6h13M6 6v8.5"/></svg></span>Overview</a>
-    <a data-p="budget"><span class="ic"><svg viewBox="0 0 16 16"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><path d="M1.5 6h13M5.8 6v7.5M10.2 6v7.5"/></svg></span>Budget</a>
-    <a data-p="trace"><span class="ic"><svg viewBox="0 0 16 16"><path d="M3 3h4.5M3 3v4.5M3 3l10 10M13 13h-4.5M13 13v-4.5"/></svg></span>Formulas</a>
-    <a data-p="simulation"><span class="ic"><svg viewBox="0 0 16 16"><path d="M1.5 8c1.8-4.2 3.4-4.2 4.6 0s2.8 4.2 4.6 0 2.6-4.2 3.8 0"/></svg></span>Simulation</a>
-    <a data-p="files"><span class="ic"><svg viewBox="0 0 16 16"><path d="M1.5 4a1.5 1.5 0 0 1 1.5-1.5h3l1.5 2h5A1.5 1.5 0 0 1 14 6v6a1.5 1.5 0 0 1-1.5 1.5H3A1.5 1.5 0 0 1 1.5 12z"/></svg></span>Files</a>
-    <a data-p="team"><span class="ic"><svg viewBox="0 0 16 16"><circle cx="5.5" cy="5.5" r="2.5"/><path d="M1.5 13.5c0-2.2 1.8-4 4-4s4 1.8 4 4M11 3.4a2.5 2.5 0 0 1 0 4.4M12 9.7c1.5.6 2.5 2 2.5 3.8"/></svg></span>Team &amp; access</a>
+    <a data-p="home" class="on"><span class="ic"><svg viewBox="0 0 16 16"><path d="M2 7.5 8 2l6 5.5M3.5 6.5V14h9V6.5"/></svg></span>Home</a>
+    <a data-p="budget"><span class="ic"><svg viewBox="0 0 16 16"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><path d="M1.5 6h13M5.8 6v7.5M10.2 6v7.5"/></svg></span>Plan</a>
+    <a data-p="trace"><span class="ic"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.5v2.5M8 12v2.5M1.5 8H4M12 8h2.5M3.5 3.5 5.2 5.2M12.5 3.5 10.8 5.2M3.5 12.5 5.2 10.8M12.5 12.5 10.8 10.8"/></svg></span>Analyze</a>
+    <a data-p="model"><span class="ic"><svg viewBox="0 0 16 16"><rect x="1.5" y="1.5" width="5.5" height="5.5" rx="1"/><rect x="9" y="9" width="5.5" height="5.5" rx="1"/><path d="M4.25 7v4.75H9M11.75 9V4.25H7"/></svg></span>Model</a>
+    <a data-p="team"><span class="ic"><svg viewBox="0 0 16 16"><path d="M8 1.5 13.5 4v4c0 3.2-2.3 5.6-5.5 6.5C4.8 13.6 2.5 11.2 2.5 8V4z"/><path d="M5.5 8l1.8 1.8L10.8 6"/></svg></span>Govern</a>
   </nav>
   <div class="whoami" id="whoBox"><b>Local sandbox</b>full modelling access</div>
 </aside>
 <div id="maincol">
   <div id="topbar">
-    <span id="crumb">Overview</span>
+    <span id="crumb">Home</span>
+    <span class="ctx">
+      <select id="modelSel" title="Model"></select>
+      <span class="sep">›</span>
+      <select id="verSel" title="Version" style="display:none"></select>
+      <span class="sep" id="scenSep" style="display:none">›</span>
+      <span id="scen"></span>
+    </span>
+    <span id="roundPill" style="display:none"></span>
     <span id="scenTag" style="display:none"></span>
     <div class="menu" id="checksMenu">
       <button id="checksLbl" title="Model checks — every assert, every period">Checks</button>
@@ -437,16 +471,15 @@
     </div>
   </div>
   <div id="scenBanner" style="display:none"></div>
-  <div id="procBanner" style="display:none"></div>
   <div id="pages">
-    <div class="page on" id="pageOverview"><div id="modelPane"></div></div>
+    <div class="page on" id="pageHome"><div class="twrap2" id="homePane"></div></div>
     <div class="page" id="pageBudget">
       <div class="toolbar">
-        <span class="tlbl">Scenario</span><span id="scen"></span>
-        <span class="tlbl" id="pivotLbl" style="margin-left:.6rem;display:none">Columns</span>
+        <span class="tlbl" id="pivotLbl" style="display:none">Columns</span>
         <select id="pivotSel" style="display:none"></select>
         <select id="pivotT" style="display:none"></select>
         <span style="flex:1"></span>
+        <button id="simToggle">Simulate ▾</button>
         <button id="addPeriodBtn" title="Extend the calendar by one period">Add period</button>
         <button id="addMemberBtn" title="Add a member to a dimension" style="display:none">Add member…</button>
         <span id="amForm" style="display:none"></span>
@@ -454,26 +487,30 @@
         <span class="chip" id="fmtBtn" style="cursor:pointer">Aa format</span>
         <div id="fmtPop" style="display:none"></div>
       </div>
+      <div id="simStrip" style="display:none"><div id="simPane"></div></div>
       <div id="right"><table id="tbl"></table></div>
+      <div id="planFoot" style="display:none"></div>
     </div>
     <div class="page" id="pageTrace">
       <div class="toolbar"><span class="tlbl">Trace</span>
         <select id="traceSel" style="min-width:14em"></select>
-        <span class="tlbl" style="margin-left:.6rem">click any name in a formula to unfold it</span>
+        <span class="tlbl" style="margin-left:.6rem">click any name in a formula to unfold it · click a measure name to open the full analysis</span>
       </div>
       <div class="twrap"><div id="traceTree" class="mcard">pick a measure to trace</div></div>
     </div>
-    <div class="page" id="pageSimulation"><div class="twrap2" id="simPane"></div></div>
-    <div class="page" id="pageFiles">
-      <div class="toolbar">
-        <span id="ftabs" style="display:none"></span>
+    <div class="page" id="pageModel">
+      <div class="toolbar" id="modelTabs">
+        <button data-mt="structure" class="on">Structure</button>
+        <button data-mt="source">Source</button>
         <span style="flex:1"></span>
         <span id="draftState"></span>
-        <button id="saveBtn" title="Save the active file to disk (Ctrl/Cmd+S)">Save to disk</button>
+        <button id="saveBtn" title="Save the active file to disk (Ctrl/Cmd+S)" style="display:none">Save to disk</button>
       </div>
-      <div class="fbody">
+      <div id="mtStructure" style="display:flex;flex:1;min-height:0;flex-direction:column"><div id="modelPane"></div></div>
+      <div id="mtSource" class="fbody" style="display:none">
         <div id="fexp"></div>
         <div id="edcol">
+          <div class="toolbar" style="padding:.3rem .8rem;min-height:0"><span id="ftabs" style="display:none"></span></div>
           <div id="left">
             <div id="edwrap">
               <div id="gutter">1</div>
@@ -624,10 +661,8 @@ function renderScenChips(r) {
   box.innerHTML = "";
   // The Scenario menu exists only when the model declares scenarios —
   // and only locally (scenario preview runs in the wasm session).
-  const menu = document.getElementById("scenMenu");
-  if (menu) menu.style.display = !SERVER && names.length > 1 ? "" : "none";
-  const lbl = document.getElementById("scenMenuLbl");
-  if (lbl) lbl.textContent = activeScen === "Base" ? "Scenario" : `Scenario · ${activeScen}`;
+  const sep = document.getElementById("scenSep");
+  if (sep) sep.style.display = !SERVER && names.length > 1 ? "" : "none";
   if (names.length === 1) return;
   for (const n of names) {
     const b = document.createElement("button");
@@ -1232,7 +1267,8 @@ function render(r) {
   document.querySelectorAll("#scalars .scx").forEach(sp =>
     sp.addEventListener("click", () => inspect(sp.dataset.s, "", null, false)));
   focusPending();
-  if (PAGE === "overview") renderModel();
+  if (PAGE === "home") renderHome();
+  if (PAGE === "model" && MT === "structure") renderModel();
   if (PAGE === "trace") renderTrace(true);
   const st = document.getElementById("scenTag");
   const sc = r.active && r.active !== "Base" ? r.active : null;
@@ -1676,7 +1712,7 @@ async function renderModel() {
     g.addEventListener("click", () => showNodeDetail(info, g.dataset.n));
     g.addEventListener("dblclick", () => {
       const m = info.measures.find(x => x.name === g.dataset.n) || info.asserts.find(x => x.name === g.dataset.n);
-      if (m && !SERVER) { setPage("files"); gotoDef(m.file, m.line); }
+      if (m && !SERVER) { gotoDef(m.file, m.line); }
     });
   });
   pane.querySelectorAll(".ftree .fname.link").forEach(el => el.addEventListener("click", () => {
@@ -1687,7 +1723,7 @@ async function renderModel() {
     renderTabs();
     updateDraftState();
     renderHl();
-    setPage("files");
+    setModelTab("source");
   }));
 }
 
@@ -1870,6 +1906,13 @@ document.addEventListener("click", e => {
 });
 renderFmtBtn();
 
+document.getElementById("simToggle").addEventListener("click", () => {
+  const strip = document.getElementById("simStrip");
+  const open = strip.style.display === "none";
+  strip.style.display = open ? "" : "none";
+  document.getElementById("simToggle").textContent = open ? "Simulate ▴" : "Simulate ▾";
+  if (open) renderSimulation();
+});
 document.getElementById("entryHelp").addEventListener("mouseover", e =>
   showTipAt(e.clientX, e.clientY, ENTRY_LEGEND));
 document.getElementById("entryHelp").addEventListener("mouseleave", hideTip);
@@ -1884,7 +1927,53 @@ function toast(msg, bad) {
   el._h = setTimeout(() => el.style.display = "none", bad ? 5200 : 2600);
 }
 
-// ---- checks dropdown ----
+// ---- Home: status first — what changed, what's failing, what's mine ----
+async function renderHome() {
+  const pane = document.getElementById("homePane");
+  const r = lastState;
+  const info = window.__lastInfo;
+  if (!r) { pane.innerHTML = `<div class="mcard mnote">loading the model…</div>`; return; }
+  const fails = (r.asserts || []).filter(([, ok]) => !ok);
+  const checks = `<div class="mcard"><h3>Health</h3>
+    ${(r.asserts || []).map(([n, ok]) => `<div class="dimrow">
+      <span class="chip ${ok ? "okc" : "badc"}">${ok ? "✓" : "✗"} ${escM(n)}</span>
+      <a href="#" class="hAnalyze" data-n="${escM(n)}" style="color:var(--pri);text-decoration:none;font-size:12px">analyze</a></div>`).join("")
+      || `<div class="mnote">no checks declared</div>`}
+    ${fails.length ? `<div class="mnote" style="color:var(--bad);font-weight:600;margin-top:.4rem">${fails.length} covenant${fails.length === 1 ? "" : "s"} failing — open Analyze to trace why</div>` : ""}</div>`;
+  let mine = "";
+  if (SERVER) {
+    const cells = document.querySelectorAll("#tbl input[data-key]").length;
+    const me = window.clientMe ? window.clientMe() : null;
+    mine = `<div class="mcard"><h3>Your part</h3>
+      <div class="mnote">${me ? `<b>${escM(me.user)}</b> · ${escM(me.dept)} · ${escM(me.role)}` : ""}</div>
+      <div class="mnote">${cells ? `<b>${cells}</b> cells are open to you this round` : "no cells are open to you right now"}</div>
+      <button class="hGo" data-p="budget" style="margin-top:.3rem">Open the plan</button></div>`;
+  }
+  const scal = (r.scalars || []).filter(x => !x.input).slice(0, 4);
+  const numbers = scal.length ? `<div class="mcard"><h3>Key figures</h3>
+    ${scal.map(x => `<div class="dimrow" style="display:flex;align-items:baseline;gap:.6rem">
+      <span>${escM(x.name)}</span>
+      <b style="margin-left:auto;font-family:var(--mono);font-variant-numeric:tabular-nums">${fmt(x.val)}</b>
+      <span class="tunit">${escM(x.unit)}</span></div>`).join("")}</div>` : "";
+  const model = info ? `<div class="mcard"><h3>The model</h3>
+    <div class="mnote"><b>${escM(info.model)}</b> — ${info.files.length} files ·
+      ${info.measures.length} measures · ${info.dims.length} dimension${info.dims.length === 1 ? "" : "s"} ·
+      ${r.periods[0]} → ${r.periods[r.periods.length - 1]}</div>
+    <div class="toolbar" style="border:0;padding:.3rem 0 0;background:transparent">
+      <button class="hGo" data-p="model">Structure &amp; source</button>
+      <button class="hGo" data-p="trace">Analyze a number</button>
+      <button class="hGo" data-p="team">Govern</button></div></div>` : "";
+  pane.innerHTML = `<div class="mgrid">${checks}${mine}${numbers}${model}</div>`;
+  pane.querySelectorAll(".hGo").forEach(b => b.addEventListener("click", () => setPage(b.dataset.p)));
+  pane.querySelectorAll(".hAnalyze").forEach(a => a.addEventListener("click", e => {
+    e.preventDefault();
+    const assert = (window.__lastInfo?.asserts || []).find(x => x.name === a.dataset.n);
+    if (assert && assert.refs.length) { traceRoot = assert.refs[0]; traceOpen.clear(); }
+    setPage("trace");
+  }));
+}
+
+// ---- checks dropdown ----// ---- checks dropdown ----
 document.getElementById("checksLbl").addEventListener("click", e => {
   e.stopPropagation();
   document.getElementById("checksMenu").classList.toggle("open");
@@ -1900,10 +1989,13 @@ document.addEventListener("keydown", e => {
 
 // ---- pages: sidebar navigation ----
 // (wired before the client-mode fork so connected users get every page)
-let PAGE = "overview";
-const PAGE_TITLES = { overview: "Overview", budget: "Budget", trace: "Formulas",
-  simulation: "Simulation", files: "Files", team: "Team & access" };
+let PAGE = "home";
+const PAGE_TITLES = { home: "Home", budget: "Plan", trace: "Analyze",
+  model: "Model", team: "Govern" };
+const LEGACY_PAGE = { overview: "model", files: "model", simulation: "budget" };
 function setPage(p) {
+  p = LEGACY_PAGE[p] || p;
+  if (!PAGE_TITLES[p]) p = "home";
   PAGE = p;
   document.querySelectorAll("#pages .page").forEach(el =>
     el.classList.toggle("on", el.id === "page" + p[0].toUpperCase() + p.slice(1)));
@@ -1911,10 +2003,12 @@ function setPage(p) {
     x.classList.toggle("on", x.dataset.p === p));
   document.getElementById("crumb").textContent = PAGE_TITLES[p] || p;
   localStorage.setItem("fml:page", p);
-  if (p === "overview") renderModel();
+  if (p === "home") renderHome();
   if (p === "trace") renderTrace();
-  if (p === "simulation") renderSimulation();
-  if (p === "files") { renderExplorer(); renderHl(); }
+  if (p === "model") {
+    if (MT === "structure") renderModel();
+    else { renderExplorer(); renderHl(); }
+  }
   if (p === "team") window.renderTeamPage();
 }
 document.querySelectorAll("#side nav a").forEach(x =>
@@ -1994,6 +2088,15 @@ async function renderTrace(keep) {
     if (traceOpen.has(key)) traceOpen.delete(key); else traceOpen.add(key);
     renderTrace(true);
   }));
+  // A measure NAME opens the full analysis drawer (contribution bars,
+  // tornado, goal-seek) — local engine only.
+  if (!SERVER) tree.querySelectorAll(".tname").forEach(el => el.addEventListener("click", () => {
+    const name = el.textContent.trim();
+    const m = info.measures.find(x => x.name === name);
+    if (!m) return;
+    const row = (lastState?.series || []).find(x => x.key === name);
+    inspect(name, row?.member || "", row ? row.range[1] : null, false);
+  }));
 }
 
 // ---- the file explorer: everything organized in folders ----------------
@@ -2055,7 +2158,24 @@ window.renderTeamPage = function () {
       checkpoint. Accounts are declared in <code>users.cfg</code> / <code>access.cfg</code>
       in the server's config directory.</div></div>`;
 };
-setPage(localStorage.getItem("fml:page") || "overview");
+// ---- Model zone sub-tabs: Structure | Source ----
+let MT = localStorage.getItem("fml:mt") || "structure";
+function setModelTab(mt) {
+  MT = mt;
+  localStorage.setItem("fml:mt", mt);
+  document.querySelectorAll("#modelTabs button[data-mt]").forEach(b =>
+    b.classList.toggle("on", b.dataset.mt === mt));
+  document.getElementById("mtStructure").style.display = mt === "structure" ? "flex" : "none";
+  document.getElementById("mtSource").style.display = mt === "source" ? "flex" : "none";
+  document.getElementById("saveBtn").style.display = mt === "source" && !SERVER ? "" : "none";
+  if (mt === "structure") renderModel();
+  else { renderExplorer(); renderHl(); }
+}
+document.querySelectorAll("#modelTabs button[data-mt]").forEach(b =>
+  b.addEventListener("click", () => setModelTab(b.dataset.mt)));
+setModelTab(MT);
+
+setPage(localStorage.getItem("fml:page") || "home");
 
 if (SERVER && !TOKEN) {
   // ---- landing: ask for the access token ----
@@ -2129,57 +2249,58 @@ if (SERVER) {
     ? ME.role !== "viewer"
     : !proc.locked && ME.role !== "viewer" && (ME.role === "admin" || !proc.submitted.includes(ME.dept));
   function renderProc() {
-    const b = document.getElementById("procBanner");
-    b.style.display = "flex";
-    b.classList.toggle("locked", proc.locked);
-    let html = `<b>${ME.user}</b> <span class="tag">${ME.dept} · ${ME.role}</span>`;
+    // Context bar: where am I, is the round open.
+    const pill = document.getElementById("roundPill");
+    pill.style.display = "";
     if (clientVer) {
-      html += ` <span class="tag sub">working in version · ${clientVer}</span>
-        <button id="pBack">back to budget of record</button>`;
-      b.innerHTML = html;
-      b.querySelector("#pBack").addEventListener("click", async () => {
+      pill.className = "pill submitted";
+      pill.textContent = `version · ${clientVer}`;
+    } else if (proc.locked) {
+      pill.className = "pill locked";
+      pill.textContent = "budget locked";
+    } else if (proc.submitted.includes(ME.dept) && ME.role !== "admin") {
+      pill.className = "pill submitted";
+      pill.textContent = `${ME.dept} submitted`;
+    } else {
+      pill.className = "pill open";
+      pill.textContent = proc.submitted.length
+        ? `round open · ${proc.submitted.length} submitted`
+        : "round open";
+    }
+    // Plan footer: submitting is the LAST STEP of entering, so it lives
+    // at the bottom of the plan.
+    const foot = document.getElementById("planFoot");
+    if (clientVer) {
+      foot.style.display = "";
+      foot.innerHTML = `<span class="mnote">working in <b>version · ${clientVer}</b> —
+        edits land in its own signed log, the budget of record is untouched</span>
+        <button id="pBack">Back to budget of record</button>`;
+      foot.querySelector("#pBack").addEventListener("click", async () => {
         clientVer = "";
         await loadVersions();
         await refreshFromServer(0, "budget of record");
       });
       return;
     }
-    if (proc.locked) {
-      html += ` <b>BUDGET LOCKED</b>`;
-    } else if (proc.submitted.includes(ME.dept) && ME.role !== "admin") {
-      html += ` <span class="tag sub">${ME.dept} submitted — waiting for finance</span>`;
-    } else {
-      html += ` round open`;
-    }
-    for (const d of proc.submitted) {
-      if (d !== ME.dept || ME.role === "admin") html += ` <span class="tag sub">${d} ✓ submitted</span>`;
-    }
     if (!proc.locked && ME.role !== "viewer" && !proc.submitted.includes(ME.dept)) {
-      html += ` <button id="pSubmit">submit ${ME.dept}'s numbers</button>`;
+      foot.style.display = "";
+      foot.innerHTML = `<span class="mnote">done entering? submitting hands
+        <b>${ME.dept}</b>'s numbers to finance and freezes your cells until reopened</span>
+        <button id="pSubmit" class="primary">Submit ${ME.dept}'s numbers</button>`;
+      foot.querySelector("#pSubmit").addEventListener("click", async () => {
+        const r = await post("/submit");
+        if (!r.ok) { toast(r.error, true); return; }
+        await refreshFromServer(0, `${ME.dept} submitted`);
+        toast(`${ME.dept} submitted — finance can now review`);
+      });
+    } else if (proc.locked || proc.submitted.includes(ME.dept)) {
+      foot.style.display = "";
+      foot.innerHTML = `<span class="mnote">${proc.locked
+        ? "the budget is locked — governance actions live under Govern"
+        : `${ME.dept} has submitted — an admin can reopen under Govern`}</span>`;
+    } else {
+      foot.style.display = "none";
     }
-    if (ME.role === "admin") {
-      for (const d of proc.submitted) html += ` <button class="pReopen" data-d="${d}">reopen ${d}</button>`;
-      if (!proc.locked) html += ` <button id="pLock">lock the budget</button>`;
-      else html += ` <button class="pReopen" data-d="">unlock</button>`;
-      html += ` <button id="pManage">manage…</button>`;
-    }
-    b.innerHTML = html;
-    b.querySelector("#pSubmit")?.addEventListener("click", async () => {
-      const r = await post("/submit");
-      if (!r.ok) { toast(r.error, true); return; }
-      await refreshFromServer(0, `${ME.dept} submitted`);
-    });
-    b.querySelectorAll(".pReopen").forEach(btn => btn.addEventListener("click", async () => {
-      const r = await post("/reopen", { dept: btn.dataset.d || ME.dept });
-      if (!r.ok) { toast(r.error, true); return; }
-      await refreshFromServer(0, "reopened");
-    }));
-    b.querySelector("#pLock")?.addEventListener("click", async () => {
-      const r = await post("/lock");
-      if (!r.ok) { toast(r.error, true); return; }
-      await refreshFromServer(0, "budget locked");
-    });
-    b.querySelector("#pManage")?.addEventListener("click", () => setPage("team"));
   }
   window.renderTeamPage = async function () {
     const pane = document.getElementById("teamPane");
@@ -2351,7 +2472,7 @@ function leverOptions() {
   return opts;
 }
 function gotoDef(file, line) {
-  if (!SERVER) setPage("files");
+  if (!SERVER) { setPage("model"); setModelTab("source"); }
   const key = file === "main" || file === "model" ? mainFile() : file;
   if (fileTexts[key] !== undefined && key !== activeFile) {
     activeFile = key;
