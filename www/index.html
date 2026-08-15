@@ -383,6 +383,9 @@
     <div class="page" id="pageBudget">
       <div class="toolbar">
         <span class="tlbl">Scenario</span><span id="scen"></span>
+        <span class="tlbl" id="pivotLbl" style="margin-left:.6rem;display:none">Columns</span>
+        <select id="pivotSel" style="display:none"></select>
+        <select id="pivotT" style="display:none"></select>
         <span style="flex:1"></span>
         <button id="addPeriodBtn" title="Extend the calendar by one period">Add period</button>
         <button id="addMemberBtn" title="Add a member to a dimension" style="display:none">Add member…</button>
@@ -607,6 +610,14 @@ function syncPatchResult(r2, us, what) {
   renderTabs();
   render(r2);
 }
+// ---- the pivot: columns = periods (default) or a dimension's members ---
+let PIVOT = Object.assign({ mode: "periods", t: 0 },
+  JSON.parse(localStorage.getItem("fml:pivot") || "{}"));
+function savePivot() {
+  localStorage.setItem("fml:pivot", JSON.stringify(PIVOT));
+  if (lastState) render(lastState);
+}
+
 // ---- display formatting: finance-grade, user-editable ------------------
 let FMT = Object.assign({ dec: "auto", neg: "paren", scale: 1, pct: true, dash0: false },
   JSON.parse(localStorage.getItem("fml:fmt") || "{}"));
@@ -726,29 +737,38 @@ function entryTargets(inp, p) {
   return [];
 }
 let PENDING_FOCUS = null;
+// Geometric movement: right/left = adjacent input in this row; down = the
+// next row's input in the same COLUMN — correct in both grid layouts.
+function inputHandle(n) {
+  return n.dataset.splash !== undefined
+    ? { splash: n.dataset.splash, t: n.dataset.t }
+    : { key: n.dataset.key, member: n.dataset.member, t: n.dataset.t };
+}
 function neighborOf(inp, dir) {
   if (!dir) return null;
-  const t = Number(inp.dataset.t);
+  const td = inp.closest("td"), tr = td.parentElement;
   if (dir === "right" || dir === "left") {
-    const row = [...document.querySelectorAll(
-      `td input[data-key="${CSS.escape(inp.dataset.key)}"][data-member="${CSS.escape(inp.dataset.member || "")}"]`)]
-      .sort((a, b) => Number(a.dataset.t) - Number(b.dataset.t));
-    const i = row.findIndex(x => x === inp);
-    const n = row[i + (dir === "right" ? 1 : -1)];
-    return n ? { key: n.dataset.key, member: n.dataset.member, t: n.dataset.t } : null;
+    const rowInputs = [...tr.querySelectorAll("input")];
+    const i = rowInputs.indexOf(inp);
+    const n = rowInputs[i + (dir === "right" ? 1 : -1)];
+    return n ? inputHandle(n) : null;
   }
-  // down: next input row at the same period
-  const all = [...document.querySelectorAll(`td input[data-t="${t}"]`)];
-  const i = all.findIndex(x => x === inp);
-  const n = all[i + 1];
-  return n ? { key: n.dataset.key, member: n.dataset.member, t: n.dataset.t } : null;
+  const rows = [...tr.parentElement.children];
+  const ci = td.cellIndex;
+  for (let k = rows.indexOf(tr) + 1; k < rows.length; k++) {
+    const cand = rows[k].children[ci]?.querySelector("input");
+    if (cand) return inputHandle(cand);
+  }
+  return null;
 }
 function focusPending() {
   if (!PENDING_FOCUS) return;
-  const { key, member, t } = PENDING_FOCUS;
+  const h = PENDING_FOCUS;
   PENDING_FOCUS = null;
-  const inp = document.querySelector(
-    `td input[data-key="${CSS.escape(key)}"][data-member="${CSS.escape(member || "")}"][data-t="${t}"]`);
+  const inp = h.splash !== undefined
+    ? document.querySelector(`td input[data-splash="${CSS.escape(h.splash)}"][data-t="${h.t}"]`)
+    : document.querySelector(
+        `td input[data-key="${CSS.escape(h.key)}"][data-member="${CSS.escape(h.member || "")}"][data-t="${h.t}"]`);
   if (inp) { inp.focus(); inp.select(); }
 }
 function commitCell(inp, dir) {
@@ -760,6 +780,11 @@ function commitCell(inp, dir) {
     if (raw.trim() !== "") toast(`didn't understand "${raw}" — hover ⌨ entry codes`, true);
     inp.value = inp.defaultValue;
     if (move) { PENDING_FOCUS = move; focusPending(); }
+    return;
+  }
+  if (PIVOT.mode !== "periods" && ["repeat", "even", "prop", "grow"].includes(parsed.op)) {
+    toast("period spread codes (>, />, %>, g5>) work in the Periods layout", true);
+    inp.value = inp.defaultValue;
     return;
   }
   let entries = entryTargets(inp, parsed);
@@ -828,6 +853,11 @@ function commitSplash(inp, dir) {
   const parsed = parseEntry(raw, cur);
   if (parsed === null) {
     if (raw.trim() !== "") toast(`didn't understand "${raw}" — hover ⌨ entry codes`, true);
+    inp.value = inp.defaultValue;
+    return;
+  }
+  if (PIVOT.mode !== "periods" && ["repeat", "even", "prop", "grow"].includes(parsed.op)) {
+    toast("period spread codes (>, />, %>, g5>) work in the Periods layout", true);
     inp.value = inp.defaultValue;
     return;
   }
@@ -1012,6 +1042,79 @@ function render(r) {
     html += "</tr>";
   }
   html += "</tbody>";
+  // ---- pivot: columns = a dimension's members (one period at a time) ----
+  const dims = r.dims || [];
+  const pivotDim = PIVOT.mode !== "periods" && dims.find(d => d.name === PIVOT.mode);
+  const pT = Math.min(PIVOT.t || 0, r.periods.length - 1);
+  if (pivotDim) {
+    const mset = new Set(pivotDim.members);
+    let ph = `<thead><tr><th>measure · ${r.periods[pT]}</th>`
+      + pivotDim.members.map(m => `<th>${m}</th>`).join("")
+      + `<th>Σ ${pivotDim.name}</th></tr></thead><tbody>`;
+    const seen = new Set();
+    for (const s of r.series) {
+      if (seen.has(s.key)) continue;
+      seen.add(s.key);
+      const group = r.series.filter(x => x.key === s.key);
+      const dimmed = group.length > 1 && group.every(x => mset.has(x.member));
+      const cls = s.input ? "inp" : "";
+      const nameData = SERVER ? "" : ` class="mname" data-nkey="${s.key}" data-nmember="${dimmed ? group[0].member : ""}" data-nt="${pT}"`;
+      ph += `<tr class="${cls}"><td title="${s.key}"${nameData}>${s.key}<span class="unit">${s.unit}</span></td>`;
+      if (dimmed) {
+        const rowMax = Math.max(0, ...group.map(x => Math.abs(x.vals[pT] || 0)),
+          Math.abs(group.reduce((a, x) => a + (x.vals[pT] || 0), 0)));
+        let allEd = true;
+        for (const mname of pivotDim.members) {
+          const row = group.find(x => x.member === mname);
+          const v = row ? row.vals[pT] : null;
+          const ed = row && cellEditable(row, pT);
+          allEd = allEd && ed;
+          if (ed) {
+            ph += `<td><input autocomplete="off" data-key="${s.key}" data-member="${mname}" data-t="${pT}" value="${v === null ? "" : v}"></td>`;
+          } else {
+            const torn = !SERVER && !inScen && row && !row.input ? " torn" : "";
+            const tdata = torn ? ` data-tkey="${s.key}" data-tmember="${mname}" data-tt="${pT}" title="click: explain this number"` : "";
+            ph += `<td class="${torn}${v !== null && v < 0 ? " neg" : ""}"${tdata}>${fmtCell(v, s.unit, rowMax)}</td>`;
+          }
+        }
+        const tot = group.reduce((a, x) => a + (x.vals[pT] || 0), 0);
+        ph += s.input && allEd
+          ? `<td><input autocomplete="off" data-splash="${s.key}" data-t="${pT}" value="${tot}"></td>`
+          : `<td class="${tot < 0 ? "neg" : ""}" style="font-weight:600">${fmtCell(tot, s.unit, rowMax)}</td>`;
+      } else {
+        // undimensioned: members blank, the value lives in the Σ column
+        ph += pivotDim.members.map(() => `<td class="out">·</td>`).join("");
+        const row = group[0];
+        const v = row.vals[pT];
+        const rowMax = Math.max(0, ...row.vals.filter(x => x !== null).map(Math.abs));
+        if (cellEditable(row, pT)) {
+          ph += `<td><input autocomplete="off" data-key="${row.key}" data-member="" data-t="${pT}" value="${v === null ? "" : v}"></td>`;
+        } else {
+          const torn = !SERVER && !inScen && !row.input ? " torn" : "";
+          const tdata = torn ? ` data-tkey="${row.key}" data-tmember="" data-tt="${pT}" title="click: explain this number"` : "";
+          ph += `<td class="${torn}${v !== null && v < 0 ? " neg" : ""}"${tdata}>${fmtCell(v, row.unit, rowMax)}</td>`;
+        }
+      }
+      ph += "</tr>";
+    }
+    ph += "</tbody>";
+    html = ph;
+  }
+  // pivot controls
+  const psel = document.getElementById("pivotSel");
+  if (psel) {
+    const show = dims.length > 0;
+    document.getElementById("pivotLbl").style.display = show ? "" : "none";
+    psel.style.display = show ? "" : "none";
+    psel.innerHTML = `<option value="periods"${PIVOT.mode === "periods" ? " selected" : ""}>Periods</option>`
+      + dims.map(d => `<option value="${d.name}"${PIVOT.mode === d.name ? " selected" : ""}>${d.name} members</option>`).join("");
+    psel.onchange = () => { PIVOT.mode = psel.value; savePivot(); };
+    const ptsel = document.getElementById("pivotT");
+    ptsel.style.display = show && pivotDim ? "" : "none";
+    ptsel.innerHTML = r.periods.map((p, i) =>
+      `<option value="${i}"${i === pT ? " selected" : ""}>${p}</option>`).join("");
+    ptsel.onchange = () => { PIVOT.t = Number(ptsel.value); savePivot(); };
+  }
   document.getElementById("tbl").innerHTML = html;
   document.getElementById("asserts").innerHTML = r.asserts.map(([n, ok, dev]) =>
     `<span class="${ok ? "pass" : "fail"}">${n}</span>`).join(" ");
