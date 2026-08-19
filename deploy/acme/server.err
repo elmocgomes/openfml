@@ -1,4 +1,0 @@
-seeded Super Admin 'admin' with initial password: e41f0e912e44931b
-  (also written to deploy/acme/admin-initial-password.txt — delete it after first login)
-industrial_budget.fml: replayed 25 events (chain verified)
-fml-server on 127.0.0.1:5199 — 2 models, 7 users, tokens via 'openfml-server token <user>'
