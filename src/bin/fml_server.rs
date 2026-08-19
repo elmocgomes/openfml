@@ -27,7 +27,7 @@
 
 use openfml::server::{
     apply_event, gate, make_token, replay_signed, sign_line, verify_token, Access, Action,
-    Directory, Event, Process, Role, User, GENESIS,
+    Event, Process, Role, User, UserStore, GENESIS,
 };
 use openfml::Session;
 use std::collections::HashMap;
@@ -280,8 +280,22 @@ fn main() {
     let dir = PathBuf::from(&args[1]);
     let port = &args[2];
     let secret = openfml::crypto::load_or_create_secret(&dir.join("server.secret")).expect("server secret");
-    let directory = Directory::parse(&std::fs::read_to_string(dir.join("users.cfg")).expect("read users.cfg"))
-        .expect("parse users.cfg");
+    // Users & roles live in the mutable store (users.json); a legacy
+    // users.cfg is migrated on first boot, and a Super Admin is seeded
+    // if none exists — its initial password is printed once and written
+    // (0600) next to the config so operators can complete first login.
+    let (mut store, seeded) = UserStore::open(&dir).expect("open user store");
+    if let Some((name, pw)) = &seeded {
+        let pw_path = dir.join("admin-initial-password.txt");
+        let _ = std::fs::write(&pw_path, format!("user: {name}\npassword: {pw}\n"));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&pw_path, std::fs::Permissions::from_mode(0o600));
+        }
+        eprintln!("seeded Super Admin '{name}' with initial password: {pw}");
+        eprintln!("  (also written to {} — delete it after first login)", pw_path.display());
+    }
     let access = Access::parse(&std::fs::read_to_string(dir.join("access.cfg")).expect("read access.cfg"))
         .expect("parse access.cfg");
     std::fs::create_dir_all(dir.join("logs")).expect("logs dir");
@@ -343,7 +357,7 @@ fn main() {
     eprintln!(
         "fml-server on 127.0.0.1:{port} — {} models, {} users, tokens via 'openfml-server token <user>'",
         states.len(),
-        directory.users.len()
+        store.accounts.len()
     );
 
     for stream in listener.incoming() {
@@ -399,12 +413,110 @@ fn main() {
             }
         }
 
-        // Identity first: every endpoint requires a verified token.
-        let Some(user) = get("token").and_then(|t| verify_token(&secret, &t)).and_then(|n| directory.find(&n).cloned())
+        // Login exchanges credentials for the same HMAC bearer token the
+        // API has always used — the only endpoint besides static assets
+        // that works without one.
+        if method == "POST" && path == "/login" {
+            let u = get("user").unwrap_or_default();
+            let p = get("password").unwrap_or_default();
+            if !store.login(&u, &p) {
+                respond(&mut stream, 401, &err_json("wrong user or password"));
+                continue;
+            }
+            let a = store.find(&u).expect("login checked existence").clone();
+            let base = store.as_gate_user(&a).role;
+            respond(
+                &mut stream,
+                200,
+                &format!(
+                    "{{\"ok\":true,\"token\":\"{}\",\"user\":\"{}\",\"dept\":\"{}\",\"role\":\"{}\",\"roleName\":\"{}\",\"canManageUsers\":{},\"mustChange\":{}}}",
+                    json_escape(&make_token(&secret, &a.name)),
+                    json_escape(&a.name),
+                    json_escape(&a.dept),
+                    role_str(base),
+                    json_escape(&a.role),
+                    store.can_manage(&a),
+                    a.must_change
+                ),
+            );
+            continue;
+        }
+
+        // Identity first: every other endpoint requires a verified token.
+        let Some(account) = get("token").and_then(|t| verify_token(&secret, &t)).and_then(|n| store.find(&n).cloned())
         else {
             respond(&mut stream, 401, &err_json("missing or invalid token (or unknown user)"));
             continue;
         };
+        let user = store.as_gate_user(&account);
+
+        // Own-password change (any authenticated user).
+        if method == "POST" && path == "/password" {
+            let old = get("old").unwrap_or_default();
+            let new = get("new").unwrap_or_default();
+            match store.set_own_password(&account.name, &old, &new).and_then(|_| store.save()) {
+                Ok(()) => respond(&mut stream, 200, "{\"ok\":true}"),
+                Err(e) => respond(&mut stream, 400, &err_json(&e)),
+            }
+            continue;
+        }
+
+        // ---- user & role management (Super Admin capability) ----------
+        let manage_paths = ["/user_create", "/user_update", "/user_delete", "/role_create", "/role_update", "/role_delete"];
+        if method == "POST" && manage_paths.contains(&path) {
+            if !store.can_manage(&account) {
+                respond(&mut stream, 403, &err_json("user management requires the Super Admin capability"));
+                continue;
+            }
+            let r = match path {
+                "/user_create" => {
+                    let name = get("user").unwrap_or_default();
+                    store.create_user(
+                        &name,
+                        &get("dept").unwrap_or_default(),
+                        &get("role").unwrap_or_else(|| "viewer".into()),
+                        get("password").as_deref(),
+                    )
+                }
+                "/user_update" => {
+                    let name = get("user").unwrap_or_default();
+                    store.update_user(&name, get("dept").as_deref(), get("role").as_deref(), get("password").as_deref())
+                }
+                "/user_delete" => store.delete_user(&get("user").unwrap_or_default(), &account.name),
+                "/role_create" => store.create_role(
+                    &get("name").unwrap_or_default(),
+                    &get("base").unwrap_or_default(),
+                    get("manage_users").map(|v| v == "true").unwrap_or(false),
+                ),
+                "/role_update" => store.update_role(
+                    &get("name").unwrap_or_default(),
+                    get("base").as_deref(),
+                    get("manage_users").map(|v| v == "true"),
+                ),
+                _ => store.delete_role(&get("name").unwrap_or_default()),
+            };
+            match r.and_then(|_| store.save()) {
+                Ok(()) => respond(&mut stream, 200, "{\"ok\":true}"),
+                Err(e) => respond(&mut stream, 400, &err_json(&e)),
+            }
+            continue;
+        }
+        if method == "GET" && path == "/roles" {
+            if user.role != Role::Admin {
+                respond(&mut stream, 403, &err_json("the role table is admin-only"));
+                continue;
+            }
+            let items: Vec<String> = store.roles.iter().map(|r| format!(
+                "{{\"name\":\"{}\",\"base\":\"{}\",\"manageUsers\":{},\"builtin\":{},\"assigned\":{}}}",
+                json_escape(&r.name),
+                role_str(r.base),
+                r.manage_users,
+                r.builtin,
+                store.accounts.iter().filter(|a| a.role == r.name).count()
+            )).collect();
+            respond(&mut stream, 200, &format!("{{\"ok\":true,\"roles\":[{}]}}", items.join(",")));
+            continue;
+        }
 
         if method == "GET" && path == "/users" {
             if user.role != Role::Admin {
@@ -412,15 +524,19 @@ fn main() {
                 continue;
             }
             let mut out = String::from("{\"ok\":true,\"users\":[");
-            for (k, u) in directory.users.iter().enumerate() {
+            for (k, a) in store.accounts.iter().enumerate() {
                 if k > 0 {
                     out.push(',');
                 }
                 out.push_str(&format!(
-                    "{{\"user\":\"{}\",\"dept\":\"{}\",\"role\":\"{}\"}}",
-                    json_escape(&u.name),
-                    json_escape(&u.dept),
-                    role_str(u.role)
+                    "{{\"user\":\"{}\",\"dept\":\"{}\",\"role\":\"{}\",\"roleName\":\"{}\",\"hasPassword\":{},\"mustChange\":{},\"canManageUsers\":{}}}",
+                    json_escape(&a.name),
+                    json_escape(&a.dept),
+                    role_str(store.as_gate_user(a).role),
+                    json_escape(&a.role),
+                    a.pass.is_some(),
+                    a.must_change,
+                    store.can_manage(a)
                 ));
             }
             out.push_str("]}");
@@ -436,8 +552,8 @@ fn main() {
                 respond(&mut stream, 400, &err_json("need user"));
                 continue;
             };
-            if directory.find(&for_user).is_none() {
-                respond(&mut stream, 404, &err_json("unknown user — add them to users.cfg first"));
+            if store.find(&for_user).is_none() {
+                respond(&mut stream, 404, &err_json("unknown user — create the account first"));
                 continue;
             }
             respond(
@@ -449,10 +565,13 @@ fn main() {
         }
         if method == "GET" && path == "/models" {
             let mut out = format!(
-                "{{\"ok\":true,\"version\":\"{VERSION}\",\"me\":{{\"user\":\"{}\",\"dept\":\"{}\",\"role\":\"{}\"}},\"models\":[",
+                "{{\"ok\":true,\"version\":\"{VERSION}\",\"me\":{{\"user\":\"{}\",\"dept\":\"{}\",\"role\":\"{}\",\"roleName\":\"{}\",\"canManageUsers\":{},\"mustChange\":{}}},\"models\":[",
                 json_escape(&user.name),
                 json_escape(&user.dept),
-                role_str(user.role)
+                role_str(user.role),
+                json_escape(&account.role),
+                store.can_manage(&account),
+                account.must_change
             );
             let mut first = true;
             for ma in &access.models {
@@ -733,17 +852,19 @@ fn main() {
             ("GET", "/grants") => {
                 // Effective per-user grants (directory × access × role).
                 let mut out = String::from("{\"ok\":true,\"users\":[");
-                for (k, u) in directory.users.iter().enumerate() {
+                for (k, a) in store.accounts.iter().enumerate() {
+                    let u = store.as_gate_user(a);
                     if k > 0 {
                         out.push(',');
                     }
                     out.push_str(&format!(
-                        "{{\"user\":\"{}\",\"dept\":\"{}\",\"role\":\"{}\",\"grants\":[",
+                        "{{\"user\":\"{}\",\"dept\":\"{}\",\"role\":\"{}\",\"roleName\":\"{}\",\"grants\":[",
                         json_escape(&u.name),
                         json_escape(&u.dept),
-                        role_str(u.role)
+                        role_str(u.role),
+                        json_escape(&a.role)
                     ));
-                    for (j, g) in ma.effective_grants(u).iter().enumerate() {
+                    for (j, g) in ma.effective_grants(&u).iter().enumerate() {
                         if j > 0 {
                             out.push(',');
                         }

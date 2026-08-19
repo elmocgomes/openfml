@@ -549,3 +549,335 @@ pub fn replay(session: &mut Session, log: &str) -> Result<u64, String> {
     }
     Ok(last)
 }
+
+// ============================================================================
+// The user store: CRUD-able accounts and ROLE OBJECTS, persisted as
+// users.json in the config directory. Replaces the declarative users.cfg
+// (which is auto-migrated on first boot). Passwords are salted iterated
+// SHA-256; login exchanges credentials for the same HMAC tokens the API
+// has always used. Privilege separation: a role's BASE (admin | editor |
+// viewer) drives the model/process gate exactly as before, while the
+// separate manage_users capability governs the user-management module —
+// the seeded Super Admin holds it; ordinary finance admins do not.
+// ============================================================================
+
+#[derive(Clone, Debug)]
+pub struct RoleDef {
+    pub name: String,
+    pub base: Role,
+    pub manage_users: bool,
+    /// Built-in roles (superadmin/admin/editor/viewer) cannot be edited
+    /// or deleted.
+    pub builtin: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct Account {
+    pub name: String,
+    pub dept: String,
+    /// Role NAME — resolved against the role table.
+    pub role: String,
+    /// "<salt hex>$<hash hex>"; None = no password set (token-only user).
+    pub pass: Option<String>,
+    pub must_change: bool,
+}
+
+pub struct UserStore {
+    pub roles: Vec<RoleDef>,
+    pub accounts: Vec<Account>,
+    path: std::path::PathBuf,
+}
+
+fn base_from_str(s: &str) -> Option<Role> {
+    match s {
+        "admin" => Some(Role::Admin),
+        "editor" => Some(Role::Editor),
+        "viewer" => Some(Role::Viewer),
+        _ => None,
+    }
+}
+
+fn base_to_str(r: Role) -> &'static str {
+    match r {
+        Role::Admin => "admin",
+        Role::Editor => "editor",
+        Role::Viewer => "viewer",
+    }
+}
+
+impl UserStore {
+    fn builtin_roles() -> Vec<RoleDef> {
+        vec![
+            RoleDef { name: "superadmin".into(), base: Role::Admin, manage_users: true, builtin: true },
+            RoleDef { name: "admin".into(), base: Role::Admin, manage_users: false, builtin: true },
+            RoleDef { name: "editor".into(), base: Role::Editor, manage_users: false, builtin: true },
+            RoleDef { name: "viewer".into(), base: Role::Viewer, manage_users: false, builtin: true },
+        ]
+    }
+
+    /// Open (or create) the store: users.json if present; else migrate
+    /// users.cfg; always guarantee a Super Admin exists. Returns the
+    /// initial Super Admin password when one was just seeded.
+    pub fn open(dir: &std::path::Path) -> Result<(UserStore, Option<(String, String)>), String> {
+        let path = dir.join("users.json");
+        let mut store = if path.exists() {
+            let raw = std::fs::read_to_string(&path).map_err(|e| format!("read users.json: {e}"))?;
+            Self::from_json(&raw, path.clone())?
+        } else {
+            let mut s = UserStore { roles: Self::builtin_roles(), accounts: Vec::new(), path: path.clone() };
+            if let Ok(cfg) = std::fs::read_to_string(dir.join("users.cfg")) {
+                let legacy = Directory::parse(&cfg)?;
+                for u in legacy.users {
+                    s.accounts.push(Account {
+                        name: u.name,
+                        dept: u.dept,
+                        role: base_to_str(u.role).to_string(),
+                        pass: None,
+                        must_change: false,
+                    });
+                }
+            }
+            s
+        };
+        // Guarantee a Super Admin.
+        let mut seeded = None;
+        let has_super = store.accounts.iter().any(|a| store.can_manage_by_role(&a.role));
+        if !has_super {
+            let name = if store.find("admin").is_none() { "admin" } else { "superadmin" }.to_string();
+            let pw = crate::crypto::hex(&crate::crypto::random_bytes16())[..16].to_string();
+            let salt = crate::crypto::random_bytes16();
+            store.accounts.push(Account {
+                name: name.clone(),
+                dept: "finance".into(),
+                role: "superadmin".into(),
+                pass: Some(crate::crypto::hash_password(&pw, &salt)),
+                must_change: true,
+            });
+            seeded = Some((name, pw));
+        }
+        store.save()?;
+        Ok((store, seeded))
+    }
+
+    fn from_json(raw: &str, path: std::path::PathBuf) -> Result<UserStore, String> {
+        use crate::json::J;
+        let j = crate::json::parse(raw)?;
+        let s = |v: &J| -> String {
+            match v { J::S(x) => x.clone(), _ => String::new() }
+        };
+        let b = |v: Option<&J>| matches!(v, Some(J::B(true)));
+        let mut roles = Vec::new();
+        if let Some(J::A(rs)) = j.get("roles") {
+            for r in rs {
+                let name = r.get("name").map(&s).unwrap_or_default();
+                let base = base_from_str(&r.get("base").map(&s).unwrap_or_default())
+                    .ok_or_else(|| format!("role '{name}': bad base"))?;
+                roles.push(RoleDef {
+                    name,
+                    base,
+                    manage_users: b(r.get("manage_users")),
+                    builtin: b(r.get("builtin")),
+                });
+            }
+        }
+        // Built-ins always present and canonical.
+        for bi in Self::builtin_roles() {
+            match roles.iter_mut().find(|r| r.name == bi.name) {
+                Some(slot) => *slot = bi,
+                None => roles.push(bi),
+            }
+        }
+        let mut accounts = Vec::new();
+        if let Some(J::A(us)) = j.get("users") {
+            for u in us {
+                accounts.push(Account {
+                    name: u.get("name").map(&s).unwrap_or_default(),
+                    dept: u.get("dept").map(&s).unwrap_or_default(),
+                    role: u.get("role").map(&s).unwrap_or_else(|| "viewer".into()),
+                    pass: u.get("pass").map(&s).filter(|x| !x.is_empty()),
+                    must_change: b(u.get("must_change")),
+                });
+            }
+        }
+        Ok(UserStore { roles, accounts, path })
+    }
+
+    pub fn save(&self) -> Result<(), String> {
+        use crate::json::J;
+        let roles = J::A(self.roles.iter().map(|r| J::O(vec![
+            ("name".into(), J::S(r.name.clone())),
+            ("base".into(), J::S(base_to_str(r.base).into())),
+            ("manage_users".into(), J::B(r.manage_users)),
+            ("builtin".into(), J::B(r.builtin)),
+        ])).collect());
+        let users = J::A(self.accounts.iter().map(|a| J::O(vec![
+            ("name".into(), J::S(a.name.clone())),
+            ("dept".into(), J::S(a.dept.clone())),
+            ("role".into(), J::S(a.role.clone())),
+            ("pass".into(), a.pass.clone().map_or(J::Null, J::S)),
+            ("must_change".into(), J::B(a.must_change)),
+        ])).collect());
+        let doc = J::O(vec![("roles".into(), roles), ("users".into(), users)]).dump();
+        std::fs::write(&self.path, doc).map_err(|e| format!("write users.json: {e}"))
+    }
+
+    pub fn find(&self, name: &str) -> Option<&Account> {
+        self.accounts.iter().find(|a| a.name == name)
+    }
+
+    pub fn role_def(&self, role: &str) -> Option<&RoleDef> {
+        self.roles.iter().find(|r| r.name == role)
+    }
+
+    fn can_manage_by_role(&self, role: &str) -> bool {
+        self.role_def(role).map(|r| r.manage_users).unwrap_or(false)
+    }
+
+    /// The legacy User the gate/grants machinery consumes.
+    pub fn as_gate_user(&self, a: &Account) -> User {
+        User {
+            name: a.name.clone(),
+            dept: a.dept.clone(),
+            role: self.role_def(&a.role).map(|r| r.base).unwrap_or(Role::Viewer),
+        }
+    }
+
+    pub fn can_manage(&self, a: &Account) -> bool {
+        self.can_manage_by_role(&a.role)
+    }
+
+    pub fn login(&self, name: &str, pass: &str) -> bool {
+        self.find(name)
+            .and_then(|a| a.pass.as_deref())
+            .map(|stored| crate::crypto::verify_password(pass, stored))
+            .unwrap_or(false)
+    }
+
+    fn superadmin_count(&self) -> usize {
+        self.accounts.iter().filter(|a| self.can_manage_by_role(&a.role)).count()
+    }
+
+    // ---- CRUD (validated; call save() after Ok) ------------------------
+    pub fn create_user(&mut self, name: &str, dept: &str, role: &str, pass: Option<&str>) -> Result<(), String> {
+        let ok = !name.is_empty() && name.len() <= 40
+            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.');
+        if !ok {
+            return Err("user names: letters, digits, _ - . (max 40)".into());
+        }
+        if self.find(name).is_some() {
+            return Err(format!("user '{name}' already exists"));
+        }
+        if self.role_def(role).is_none() {
+            return Err(format!("unknown role '{role}'"));
+        }
+        let hashed = pass.filter(|p| !p.is_empty()).map(|p| {
+            crate::crypto::hash_password(p, &crate::crypto::random_bytes16())
+        });
+        self.accounts.push(Account {
+            name: name.into(),
+            dept: dept.into(),
+            role: role.into(),
+            pass: hashed,
+            must_change: true,
+        });
+        Ok(())
+    }
+
+    pub fn update_user(
+        &mut self,
+        name: &str,
+        dept: Option<&str>,
+        role: Option<&str>,
+        pass: Option<&str>,
+    ) -> Result<(), String> {
+        if let Some(r) = role {
+            if self.role_def(r).is_none() {
+                return Err(format!("unknown role '{r}'"));
+            }
+            // Demoting the LAST Super Admin would lock user management.
+            let was_super = self.find(name).map(|a| self.can_manage_by_role(&a.role)).unwrap_or(false);
+            if was_super && !self.can_manage_by_role(r) && self.superadmin_count() == 1 {
+                return Err("cannot demote the last Super Admin".into());
+            }
+        }
+        let a = self.accounts.iter_mut().find(|a| a.name == name)
+            .ok_or_else(|| format!("unknown user '{name}'"))?;
+        if let Some(d) = dept { a.dept = d.into(); }
+        if let Some(r) = role { a.role = r.into(); }
+        if let Some(p) = pass.filter(|p| !p.is_empty()) {
+            a.pass = Some(crate::crypto::hash_password(p, &crate::crypto::random_bytes16()));
+            a.must_change = true;
+        }
+        Ok(())
+    }
+
+    pub fn delete_user(&mut self, name: &str, actor: &str) -> Result<(), String> {
+        if name == actor {
+            return Err("you cannot delete yourself".into());
+        }
+        let idx = self.accounts.iter().position(|a| a.name == name)
+            .ok_or_else(|| format!("unknown user '{name}'"))?;
+        if self.can_manage_by_role(&self.accounts[idx].role) && self.superadmin_count() == 1 {
+            return Err("cannot delete the last Super Admin".into());
+        }
+        self.accounts.remove(idx);
+        Ok(())
+    }
+
+    pub fn set_own_password(&mut self, name: &str, old: &str, new: &str) -> Result<(), String> {
+        if new.len() < 8 {
+            return Err("passwords need at least 8 characters".into());
+        }
+        let a = self.accounts.iter().find(|a| a.name == name).ok_or("unknown user")?;
+        if let Some(stored) = a.pass.as_deref() {
+            if !crate::crypto::verify_password(old, stored) {
+                return Err("current password is wrong".into());
+            }
+        }
+        let a = self.accounts.iter_mut().find(|a| a.name == name).unwrap();
+        a.pass = Some(crate::crypto::hash_password(new, &crate::crypto::random_bytes16()));
+        a.must_change = false;
+        Ok(())
+    }
+
+    pub fn create_role(&mut self, name: &str, base: &str, manage_users: bool) -> Result<(), String> {
+        let ok = !name.is_empty() && name.len() <= 40
+            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+        if !ok {
+            return Err("role names: letters, digits, _ - (max 40)".into());
+        }
+        if self.role_def(name).is_some() {
+            return Err(format!("role '{name}' already exists"));
+        }
+        let base = base_from_str(base).ok_or("base must be admin | editor | viewer")?;
+        self.roles.push(RoleDef { name: name.into(), base, manage_users, builtin: false });
+        Ok(())
+    }
+
+    pub fn update_role(&mut self, name: &str, base: Option<&str>, manage_users: Option<bool>) -> Result<(), String> {
+        let r = self.roles.iter_mut().find(|r| r.name == name)
+            .ok_or_else(|| format!("unknown role '{name}'"))?;
+        if r.builtin {
+            return Err(format!("'{name}' is a built-in role and cannot be edited"));
+        }
+        if let Some(b) = base {
+            r.base = base_from_str(b).ok_or("base must be admin | editor | viewer")?;
+        }
+        if let Some(m) = manage_users {
+            r.manage_users = m;
+        }
+        Ok(())
+    }
+
+    pub fn delete_role(&mut self, name: &str) -> Result<(), String> {
+        let r = self.role_def(name).ok_or_else(|| format!("unknown role '{name}'"))?;
+        if r.builtin {
+            return Err(format!("'{name}' is a built-in role and cannot be deleted"));
+        }
+        if let Some(u) = self.accounts.iter().find(|a| a.role == name) {
+            return Err(format!("role '{name}' is assigned to '{}' — reassign first", u.name));
+        }
+        self.roles.retain(|x| x.name != name);
+        Ok(())
+    }
+}

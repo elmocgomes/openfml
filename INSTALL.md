@@ -3,9 +3,19 @@
 One binary is the whole deployment: `openfml-server <config-dir> <port>`
 serves the **Budget Portal** at `/`, the **modelling Studio** at
 `/studio`, and the API — one port, no other processes. All state lives
-in the config directory (`users.cfg`, `access.cfg`, `models/`, `logs/`
-with the signed audit chains, `server.secret`); the binaries are
-stateless, which is what makes upgrades safe.
+in the config directory (`users.json` with accounts and roles,
+`access.cfg`, `models/`, `logs/` with the signed audit chains,
+`server.secret`); the binaries are stateless, which is what makes
+upgrades safe.
+
+On first boot against a fresh config directory the server **seeds a
+Super Admin** (`admin`), prints its one-time password to the console
+and writes it to `<config-dir>/admin-initial-password.txt` (mode 0600 —
+delete it after first login). Sign in with it at the portal or studio;
+you are forced to choose your own password, then manage every other
+user and role from **Govern → People & access** (portal) or the
+**Team** page (studio). A legacy `users.cfg` is migrated into
+`users.json` automatically.
 
 ## 1 · From a release bundle (servers and laptops, no toolchain)
 
@@ -22,10 +32,12 @@ Then:
 openfml-server ~/.local/share/openfml/deploy 8080
 ```
 
-- Portal (contributors): `http://localhost:8080/`
-- Studio (modellers): `http://localhost:8080/studio` — local sandbox;
-  append `?token=…` to work against the server as a signed-in user.
-- Mint tokens: `openfml-server token <user> <config-dir>/server.secret`
+- Portal (contributors): `http://localhost:8080/` — sign in with
+  username and password (or an access token).
+- Studio (modellers): `http://localhost:8080/studio` — same login;
+  without a server it runs as a local sandbox.
+- Headless tokens (CI, scripts):
+  `openfml-server token <user> <config-dir>/server.secret`
 
 Bundles are produced by `scripts/package.sh` (per platform: build on the
 platform you target).
@@ -54,14 +66,18 @@ container replacements.
 
 ## Setting up a multi-user deployment
 
-1. Edit `<config-dir>/users.cfg` — one `user: department role` per line
-   (`admin` | `editor` | `viewer`).
+1. Sign in as the seeded Super Admin and create users under
+   **Govern → People & access** (portal) or **Team** (studio): username,
+   department, role, and optionally an initial password (the user
+   replaces it on first login). Custom roles combine a base capability
+   (`admin` | `editor` | `viewer`) with the *manages users* flag — the
+   Super Admin capability.
 2. Edit `<config-dir>/access.cfg` — per model: readable departments and
    per-department write grants (grants reach only literal input cells;
-   formulas are admin-only, structurally).
+   formulas are admin-only, structurally). Departments on accounts must
+   match `access.cfg`.
 3. Put your `.fml` model files (and any `data` CSV facts) in
-   `<config-dir>/models/`.
-4. Restart the server, mint a token per person, send privately.
+   `<config-dir>/models/`, restart, and send each person their login.
 
 Security posture: the server binds localhost and speaks plain HTTP;
 tokens are bearer credentials. For anything beyond one machine, front it

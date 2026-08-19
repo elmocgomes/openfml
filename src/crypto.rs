@@ -130,3 +130,52 @@ pub fn load_or_create_secret(path: &std::path::Path) -> std::io::Result<Vec<u8>>
     }
     Ok(secret)
 }
+
+/// Decode a lowercase hex string; None on bad length/characters.
+pub fn from_hex(s: &str) -> Option<Vec<u8>> {
+    if s.len() % 2 != 0 {
+        return None;
+    }
+    let mut out = Vec::with_capacity(s.len() / 2);
+    let b = s.as_bytes();
+    for i in (0..b.len()).step_by(2) {
+        let hi = (b[i] as char).to_digit(16)?;
+        let lo = (b[i + 1] as char).to_digit(16)?;
+        out.push(((hi << 4) | lo) as u8);
+    }
+    Some(out)
+}
+
+/// Password hashing: salted SHA-256, iterated 60k times (a PBKDF in the
+/// zero-dependency spirit — not memory-hard, but the tokens it guards are
+/// short-lived HMACs and the store is a 0600 file on the server).
+/// Format: "<salt hex>$<digest hex>".
+pub fn hash_password(pass: &str, salt: &[u8]) -> String {
+    let mut buf = Vec::with_capacity(salt.len() + pass.len());
+    buf.extend_from_slice(salt);
+    buf.extend_from_slice(pass.as_bytes());
+    let mut h = sha256(&buf);
+    for _ in 0..60_000 {
+        let mut b = Vec::with_capacity(32 + salt.len());
+        b.extend_from_slice(&h);
+        b.extend_from_slice(salt);
+        h = sha256(&b);
+    }
+    format!("{}${}", hex(salt), hex(&h))
+}
+
+/// Constant-time password verification against a stored "<salt>$<hash>".
+pub fn verify_password(pass: &str, stored: &str) -> bool {
+    let Some((salt_hex, _)) = stored.split_once('$') else { return false };
+    let Some(salt) = from_hex(salt_hex) else { return false };
+    ct_eq(hash_password(pass, &salt).as_bytes(), stored.as_bytes())
+}
+
+/// 16 random bytes from the OS.
+pub fn random_bytes16() -> [u8; 16] {
+    use std::io::Read;
+    let mut b = [0u8; 16];
+    let mut f = std::fs::File::open("/dev/urandom").expect("urandom");
+    f.read_exact(&mut b).expect("urandom read");
+    b
+}

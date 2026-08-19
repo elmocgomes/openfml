@@ -216,15 +216,45 @@
   #login input { width: 100%; font: inherit; padding: .55rem .7rem;
     border: 1px solid var(--line); border-radius: 8px; margin: .7rem 0 1rem; }
   #login button { width: 100%; }
+  #pwgate { position: fixed; inset: 0; background: var(--navy); display: flex;
+    align-items: center; justify-content: center; z-index: 60; }
+  #pwgate .box { background: var(--card); border-radius: 14px; padding: 2.1rem 2.3rem;
+    width: 340px; box-shadow: 0 18px 60px rgba(0,0,0,.35); }
+  #pwgate h1 { margin: 0 0 .2rem; font-size: 19px; font-weight: 650; letter-spacing: -.01em; }
+  #pwgate p { color: var(--mut); font-size: 13px; }
+  #pwgate input { width: 100%; font: inherit; padding: .55rem .7rem;
+    border: 1px solid var(--line); border-radius: 8px; margin: .3rem 0; }
+  #pwgate button { width: 100%; margin-top: .4rem; }
 </style>
 </head>
 <body>
 <div id="login" style="display:none">
   <div class="box">
     <h1>Budget Portal</h1>
-    <p>Enter your access token. Your finance administrator can issue one for you.</p>
-    <input id="loginTok" placeholder="you.a1b2c3…" autofocus>
-    <button class="act" id="loginGo">Sign in</button>
+    <p>Sign in with the account your administrator created for you.</p>
+    <form id="loginForm" autocomplete="off">
+      <input id="loginUser" placeholder="username" autofocus>
+      <input id="loginPass" type="password" placeholder="password">
+      <button class="act" id="loginGo" type="submit">Sign in</button>
+    </form>
+    <details style="margin-top:.9rem">
+      <summary style="cursor:pointer;color:var(--mut);font-size:.82rem">Use an access token instead</summary>
+      <input id="loginTok" placeholder="you.a1b2c3…" style="margin-top:.5rem">
+      <button class="act ghost" id="loginTokGo" style="margin-top:.4rem">Connect with token</button>
+    </details>
+  </div>
+</div>
+
+<div id="pwgate" style="display:none">
+  <div class="box">
+    <h1>Set a new password</h1>
+    <p>Your password was set by an administrator — choose your own before continuing.</p>
+    <form id="pwForm" autocomplete="off">
+      <input id="pwOld" type="password" placeholder="current password">
+      <input id="pwNew" type="password" placeholder="new password (min 8 characters)">
+      <input id="pwNew2" type="password" placeholder="repeat new password">
+      <button class="act" type="submit">Save & continue</button>
+    </form>
   </div>
 </div>
 
@@ -299,7 +329,8 @@ async function boot() {
   $("avatar").textContent = ME.user.slice(0, 2).toUpperCase();
   $("whoNm").textContent = ME.user;
   if (mi.version) document.querySelector("#side .logo small").textContent = `powered by OpenFML v${mi.version}`;
-  $("whoRl").textContent = `${ME.dept} · ${ME.role}`;
+  $("whoRl").textContent = `${ME.dept} · ${ME.roleName || ME.role}`;
+  if (ME.mustChange) showPwGate();
   const sel = $("modelSel");
   sel.innerHTML = MODELS.map(m => `<option${m.model === MODEL ? " selected" : ""}>${esc(m.model)}</option>`).join("");
   sel.onchange = async () => { MODEL = sel.value; VER = ""; await refresh(); await loadVersions(); renderPage(); };
@@ -350,8 +381,31 @@ async function loadVersions() {
 function showLogin(msg) {
   $("login").style.display = "flex";
   if (msg) { const p = $("login").querySelector("p"); p.textContent = msg; p.style.color = "var(--bad)"; }
-  $("loginGo").onclick = () => { TOKEN = $("loginTok").value.trim(); if (TOKEN) boot(); };
-  $("loginTok").onkeydown = e => { if (e.key === "Enter") $("loginGo").click(); };
+  $("loginForm").onsubmit = async e => {
+    e.preventDefault();
+    const r = await fetch(SERVER + "/login", { method: "POST", body: JSON.stringify({
+      user: $("loginUser").value.trim(), password: $("loginPass").value }) })
+      .then(x => x.json()).catch(() => ({ error: "Server unreachable at " + SERVER }));
+    if (!r.ok) { showLogin(r.error || "wrong user or password"); return; }
+    TOKEN = r.token;
+    boot();
+  };
+  $("loginTokGo").onclick = () => { TOKEN = $("loginTok").value.trim(); if (TOKEN) boot(); };
+  $("loginTok").onkeydown = e => { if (e.key === "Enter") { e.preventDefault(); $("loginTokGo").click(); } };
+}
+// Administrator-set passwords must be replaced before the portal opens.
+function showPwGate() {
+  $("pwgate").style.display = "flex";
+  $("pwForm").onsubmit = async e => {
+    e.preventDefault();
+    const [o, n, n2] = [$("pwOld").value, $("pwNew").value, $("pwNew2").value];
+    if (n !== n2) { toast("the new passwords do not match", true); return; }
+    const r = await post("/password", { old: o, new: n });
+    if (!r.ok) { toast(r.error, true); return; }
+    $("pwgate").style.display = "none";
+    ME.mustChange = false;
+    toast("password updated");
+  };
 }
 async function refresh() {
   STATE = await get("/state" + qs());
@@ -1025,18 +1079,68 @@ async function pageAudit(host) {
 async function pageAdmin(host) {
   host = host || $("content");
   const u = await get("/users?token=" + encodeURIComponent(TOKEN));
+  const mgr = !!(ME && ME.canManageUsers);
+  let roles = [];
+  if (mgr) {
+    const rr = await get("/roles?token=" + encodeURIComponent(TOKEN));
+    roles = rr.ok ? rr.roles : [];
+  }
+  const roleOpts = sel => roles.map(r =>
+    `<option value="${esc(r.name)}"${r.name === sel ? " selected" : ""}>${esc(r.name)}</option>`).join("");
   const rows = (u.users || []).map(x => `
-    <tr><td>${esc(x.user)}</td><td style="text-transform:capitalize">${esc(x.dept)}</td>
-      <td><span class="rolebadge ${x.role}">${x.role}</span></td>
-      <td><button class="act ghost mint" data-u="${esc(x.user)}">Issue token</button></td></tr>`).join("");
+    <tr><td>${esc(x.user)}${x.canManageUsers ? ' <span title="Super Admin — manages users & roles">★</span>' : ""}</td>
+      <td style="text-transform:capitalize">${esc(x.dept)}</td>
+      <td><span class="rolebadge ${x.role}">${esc(x.roleName || x.role)}</span></td>
+      <td style="color:var(--mut);font-size:.8rem">${x.hasPassword ? (x.mustChange ? "must change password" : "password set") : "no password"}</td>
+      <td style="white-space:nowrap">
+        <button class="act ghost mint" data-u="${esc(x.user)}">Issue token</button>${mgr ? `
+        <button class="act ghost uEdit" data-u="${esc(x.user)}" data-d="${esc(x.dept)}" data-r="${esc(x.roleName || x.role)}">Edit</button>
+        <button class="act danger uDel" data-u="${esc(x.user)}">Delete</button>` : ""}
+      </td></tr>`).join("");
+  const roleRows = roles.map(r => `
+    <tr><td>${esc(r.name)}${r.builtin ? ' <span style="color:var(--mut);font-size:.75rem">built-in</span>' : ""}</td>
+      <td>${esc(r.base)}</td><td>${r.manageUsers ? "yes" : "—"}</td><td>${r.assigned}</td>
+      <td>${r.builtin ? "" : `<button class="act danger rDel" data-r="${esc(r.name)}">Delete</button>`}</td></tr>`).join("");
   host.innerHTML = `
     <h2 class="sec" style="margin-top:0">People & access</h2>
     <div class="gridwrap"><table class="list">
-      <thead><tr><th>User</th><th>Department</th><th>Role</th><th></th></tr></thead>
+      <thead><tr><th>User</th><th>Department</th><th>Role</th><th>Login</th><th></th></tr></thead>
       <tbody>${rows}</tbody></table></div>
     <div id="mintOut"></div>
-    <p style="color:var(--mut);font-size:.83rem">Roles and departments are declared in
-      <code>users.cfg</code> / <code>access.cfg</code>; restart the server after editing.</p>
+    ${mgr ? `
+    <div class="card" id="uForm" style="margin-top:.8rem">
+      <b id="uFormTitle" style="font-size:.9rem">Add a user</b>
+      <div class="toolbar" style="margin-top:.5rem;flex-wrap:wrap;gap:.4rem">
+        <input id="nuName" placeholder="username" style="width:130px">
+        <input id="nuDept" placeholder="department" style="width:130px">
+        <select id="nuRole">${roleOpts("viewer")}</select>
+        <input id="nuPass" type="password" placeholder="initial password (optional)" style="width:190px" autocomplete="new-password">
+        <button class="act" id="nuGo">Save user</button>
+        <button class="act ghost" id="nuCancel" style="display:none">Cancel</button>
+      </div>
+      <div class="mnote" style="color:var(--mut);font-size:.8rem;margin-top:.4rem">
+        Users sign in with a password (they are asked to replace an administrator-set one on
+        first login) or with an issued token. The department must match <code>access.cfg</code>
+        for write grants to apply.</div>
+    </div>
+    <h2 class="sec">Roles</h2>
+    <div class="gridwrap"><table class="list">
+      <thead><tr><th>Role</th><th>Base capability</th><th>Manages users</th><th>Assigned</th><th></th></tr></thead>
+      <tbody>${roleRows}</tbody></table></div>
+    <div class="card" style="margin-top:.8rem">
+      <div class="toolbar" style="flex-wrap:wrap;gap:.4rem">
+        <input id="nrName" placeholder="role name" style="width:150px">
+        <select id="nrBase"><option>viewer</option><option>editor</option><option>admin</option></select>
+        <label style="font-size:.83rem;color:var(--mut)"><input type="checkbox" id="nrMgr"> manages users</label>
+        <button class="act" id="nrGo">Create role</button>
+      </div>
+      <div class="mnote" style="color:var(--mut);font-size:.8rem;margin-top:.4rem">
+        A role's <b>base capability</b> drives what the model gate allows (admin runs the
+        round, editor patches granted cells, viewer reads). <b>Manages users</b> is the
+        Super Admin capability — it unlocks this module.</div>
+    </div>` : `
+    <p style="color:var(--mut);font-size:.83rem">User and role management is reserved for the
+      Super Admin; you can issue tokens for existing users.</p>`}
     <h2 class="sec">Versions (forecast copies)</h2>
     <div class="card" id="verCard"><div class="mnote" style="color:var(--mut);font-size:.85rem">
       A version is an editable copy forked from the approved baseline with its own signed
@@ -1048,6 +1152,50 @@ async function pageAdmin(host) {
       Checkpoint writes the approved numbers back into the model files, archives the signed
       audit log, and opens the next round on that baseline. Typically run after locking.</p>
       <button class="act" id="ckBtn">Checkpoint this model</button> <span id="ckOut" style="font-size:.85rem"></span></div>`;
+  if (mgr) {
+    const rerender = () => pageAdmin(host);
+    let editing = null;
+    $("nuGo").addEventListener("click", async () => {
+      const body = { user: $("nuName").value.trim(), dept: $("nuDept").value.trim(),
+        role: $("nuRole").value, password: $("nuPass").value };
+      const r = await post(editing ? "/user_update" : "/user_create", body);
+      if (!r.ok) { toast(r.error, true); return; }
+      toast(editing ? `user '${body.user}' updated` : `user '${body.user}' created`);
+      rerender();
+    });
+    $("nuCancel").addEventListener("click", rerender);
+    host.querySelectorAll(".uEdit").forEach(b => b.addEventListener("click", () => {
+      editing = b.dataset.u;
+      $("uFormTitle").textContent = `Edit ${editing}`;
+      $("nuName").value = editing; $("nuName").disabled = true;
+      $("nuDept").value = b.dataset.d;
+      $("nuRole").value = b.dataset.r;
+      $("nuPass").placeholder = "new password (leave empty to keep)";
+      $("nuGo").textContent = "Save changes";
+      $("nuCancel").style.display = "";
+      $("uForm").scrollIntoView({ block: "nearest" });
+    }));
+    host.querySelectorAll(".uDel").forEach(b => b.addEventListener("click", async () => {
+      if (!window.confirm(`Delete user '${b.dataset.u}'? Their audit history stays in the signed log.`)) return;
+      const r = await post("/user_delete", { user: b.dataset.u });
+      if (!r.ok) { toast(r.error, true); return; }
+      toast("user deleted");
+      rerender();
+    }));
+    $("nrGo").addEventListener("click", async () => {
+      const r = await post("/role_create", { name: $("nrName").value.trim(),
+        base: $("nrBase").value, manage_users: $("nrMgr").checked ? "true" : "false" });
+      if (!r.ok) { toast(r.error, true); return; }
+      toast("role created");
+      rerender();
+    });
+    host.querySelectorAll(".rDel").forEach(b => b.addEventListener("click", async () => {
+      const r = await post("/role_delete", { name: b.dataset.r });
+      if (!r.ok) { toast(r.error, true); return; }
+      toast("role deleted");
+      rerender();
+    }));
+  }
   (async () => {
     const r = await get("/versions" + qs());
     const box = $("verList");

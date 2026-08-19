@@ -1,3 +1,6 @@
 logs/
 server.secret
 *.archived
+users.json
+admin-initial-password.txt
+server.err

@@ -2180,21 +2180,47 @@ setModelTab(MT);
 setPage(localStorage.getItem("fml:page") || "home");
 
 if (SERVER && !TOKEN) {
-  // ---- landing: ask for the access token ----
+  // ---- landing: sign in (or connect with a raw token) ----
   const div = document.createElement("div");
   div.id = "landing";
   div.innerHTML = `<div class="card"><h2>OpenFML budget server</h2>
-    <p>Paste your access token (ask your finance admin — they can mint one for you).</p>
-    <input id="tokIn" placeholder="you.a1b2c3…" autofocus>
-    <button id="tokGo">connect</button></div>`;
+    <p id="landMsg">Sign in with the account your administrator created for you.</p>
+    <form id="landForm" autocomplete="off">
+      <input id="userIn" placeholder="username" autofocus>
+      <input id="passIn" type="password" placeholder="password" style="margin-top:.4rem">
+      <button id="loginGo" type="submit">Sign in</button>
+    </form>
+    <details style="margin-top:.8rem">
+      <summary style="cursor:pointer;opacity:.6;font-size:.82em">Use an access token instead</summary>
+      <input id="tokIn" placeholder="you.a1b2c3…" style="margin-top:.5rem">
+      <button id="tokGo" type="button" style="margin-top:.4rem">Connect with token</button>
+    </details></div>`;
   document.body.appendChild(div);
-  const go = () => {
-    const t = document.getElementById("tokIn").value.trim();
-    if (t) location.search = `?server=${encodeURIComponent(SERVER)}&token=${encodeURIComponent(t)}`;
+  const enter = t => {
+    location.search = `?server=${encodeURIComponent(SERVER)}&token=${encodeURIComponent(t)}`;
   };
-  div.querySelector("#tokGo").addEventListener("click", go);
-  div.querySelector("#tokIn").addEventListener("keydown", e => { if (e.key === "Enter") go(); });
-  throw new Error("awaiting token");
+  div.querySelector("#landForm").addEventListener("submit", async e => {
+    e.preventDefault();
+    const r = await fetch(SERVER + "/login", { method: "POST", body: JSON.stringify({
+      user: document.getElementById("userIn").value.trim(),
+      password: document.getElementById("passIn").value }) })
+      .then(x => x.json()).catch(() => ({ error: "server unreachable at " + SERVER }));
+    if (!r.ok) {
+      const m = document.getElementById("landMsg");
+      m.textContent = r.error || "wrong user or password";
+      m.style.color = "var(--bad)";
+      return;
+    }
+    enter(r.token);
+  });
+  div.querySelector("#tokGo").addEventListener("click", () => {
+    const t = document.getElementById("tokIn").value.trim();
+    if (t) enter(t);
+  });
+  div.querySelector("#tokIn").addEventListener("keydown", e => {
+    if (e.key === "Enter") { e.preventDefault(); div.querySelector("#tokGo").click(); }
+  });
+  throw new Error("awaiting login");
 }
 if (SERVER) {
   // ---- connected client: the budget process, server-evaluated ----
@@ -2322,6 +2348,12 @@ if (SERVER) {
     const users = await (await fetch(SERVER + "/users?token=" + encodeURIComponent(TOKEN))).json();
     const g = await (await fetch(SERVER + "/grants" + qs())).json();
     const logR = await (await fetch(SERVER + "/log" + qs())).json();
+    const mgr = !!ME.canManageUsers;
+    let roles = [];
+    if (mgr) {
+      const rr = await (await fetch(SERVER + "/roles?token=" + encodeURIComponent(TOKEN))).json();
+      roles = rr.ok ? rr.roles : [];
+    }
     const grantsOf = u => {
       const gu = (g.users || []).find(x => x.user === u);
       if (!gu) return "—";
@@ -2331,9 +2363,43 @@ if (SERVER) {
         : gu.grants.map(x => `<span class="chip amber">${x.measure}${x.member ? "[" + x.member + "]" : ""}</span>`).join("") || "—";
     };
     const rows = (users.users || []).map(u =>
-      `<tr><td>${u.user}</td><td style="text-transform:capitalize">${u.dept}</td>
-       <td class="role-${u.role}">${u.role}</td><td>${grantsOf(u.user)}</td>
-       <td><button class="mint" data-u="${u.user}">Issue token</button></td></tr>`).join("");
+      `<tr><td>${u.user}${u.canManageUsers ? ' <span title="Super Admin — manages users & roles">★</span>' : ""}</td>
+       <td style="text-transform:capitalize">${u.dept}</td>
+       <td class="role-${u.role}">${u.roleName || u.role}</td><td>${grantsOf(u.user)}</td>
+       <td style="opacity:.6;font-size:.8em">${u.hasPassword ? (u.mustChange ? "must change pw" : "password set") : "no password"}</td>
+       <td style="white-space:nowrap"><button class="mint" data-u="${u.user}">Issue token</button>${mgr ? `
+         <button class="uEdit" data-u="${u.user}" data-d="${u.dept}" data-r="${u.roleName || u.role}">Edit</button>
+         <button class="uDel" data-u="${u.user}">Delete</button>` : ""}</td></tr>`).join("");
+    const roleRows = roles.map(r =>
+      `<tr><td>${r.name}${r.builtin ? ' <small style="opacity:.5">built-in</small>' : ""}</td>
+       <td>${r.base}</td><td>${r.manageUsers ? "yes" : "—"}</td><td>${r.assigned}</td>
+       <td>${r.builtin ? "" : `<button class="rDel" data-r="${r.name}">Delete</button>`}</td></tr>`).join("");
+    const roleOpts = roles.map(r =>
+      `<option value="${r.name}"${r.name === "viewer" ? " selected" : ""}>${r.name}</option>`).join("");
+    const mgrHtml = !mgr ? "" : `
+      <div class="mcard" id="uForm"><h3 id="uFormTitle">Add a user</h3>
+        <div class="toolbar" style="border:0;padding:.2rem 0;flex-wrap:wrap;gap:.4rem">
+          <input id="nuName" placeholder="username" style="width:120px">
+          <input id="nuDept" placeholder="department" style="width:120px">
+          <select id="nuRole">${roleOpts}</select>
+          <input id="nuPass" type="password" placeholder="initial password (optional)" style="width:180px" autocomplete="new-password">
+          <button id="nuGo">Save user</button>
+          <button id="nuCancel" style="display:none">Cancel</button>
+        </div>
+        <div class="mnote">users sign in with a password (replaced on first login when set by an
+        administrator) or an issued token; the department must match <code>access.cfg</code> for
+        write grants to apply.</div></div>
+      <div class="mcard"><h3>Roles</h3>
+        <table class="mtable"><tr><th>role</th><th>base capability</th><th>manages users</th><th>assigned</th><th></th></tr>${roleRows}</table>
+        <div class="toolbar" style="border:0;padding:.4rem 0 0;flex-wrap:wrap;gap:.4rem">
+          <input id="nrName" placeholder="role name" style="width:140px">
+          <select id="nrBase"><option>viewer</option><option>editor</option><option>admin</option></select>
+          <label class="mnote" style="margin:0"><input type="checkbox" id="nrMgr"> manages users</label>
+          <button id="nrGo">Create role</button>
+        </div>
+        <div class="mnote">the base capability drives the model gate (admin runs the round,
+        editor patches granted cells, viewer reads); <b>manages users</b> is the Super Admin
+        capability that unlocks this module.</div></div>`;
     const events = (logR.log || "").trim().split("\n").filter(Boolean).map(l => {
       const f = l.split("\t");
       if (f.length < 9) return null;
@@ -2346,11 +2412,12 @@ if (SERVER) {
     }).filter(Boolean).reverse().slice(0, 40).join("");
     pane.innerHTML = `
       <div class="mcard"><h3>People, roles &amp; write grants · ${clientModel}</h3>
-        <table class="mtable"><tr><th>user</th><th>department</th><th>role</th><th>may write</th><th></th></tr>${rows}</table>
+        <table class="mtable"><tr><th>user</th><th>department</th><th>role</th><th>may write</th><th>login</th><th></th></tr>${rows}</table>
         <div id="mintOut"></div>
         <div class="mnote" style="margin-top:.4rem">departments read only their models; editors
-        write only granted input cells — formulas are admin-only, structurally. Accounts are
-        declared in <code>users.cfg</code> / <code>access.cfg</code>; restart the server after editing.</div></div>
+        write only granted input cells — formulas are admin-only, structurally.${mgr ? ""
+          : " User and role management is reserved for the Super Admin."}</div></div>
+      ${mgrHtml}
       <div class="mcard"><h3>Round control</h3>
         <div class="toolbar" style="border:0;padding:.2rem 0">
           ${proc.locked ? '<button id="tUnlock">Unlock the budget</button>'
@@ -2366,6 +2433,53 @@ if (SERVER) {
         <div class="mnote">Checkpoint writes the approved numbers back into the model files,
         archives the signed audit log, and opens the next round on that baseline. Typically run after locking.</div>
         <button id="ckBtn" style="margin-top:.4rem">Checkpoint this model</button> <span id="ckOut" class="mnote"></span></div>`;
+    if (mgr) {
+      let editing = null;
+      pane.querySelector("#nuGo").addEventListener("click", async () => {
+        const body = { user: document.getElementById("nuName").value.trim(),
+          dept: document.getElementById("nuDept").value.trim(),
+          role: document.getElementById("nuRole").value,
+          password: document.getElementById("nuPass").value };
+        const r = await post(editing ? "/user_update" : "/user_create", body);
+        if (!r.ok) { toast(r.error, true); return; }
+        toast(editing ? `user '${body.user}' updated` : `user '${body.user}' created`);
+        window.renderTeamPage();
+      });
+      pane.querySelector("#nuCancel").addEventListener("click", () => window.renderTeamPage());
+      pane.querySelectorAll(".uEdit").forEach(b => b.addEventListener("click", () => {
+        editing = b.dataset.u;
+        document.getElementById("uFormTitle").textContent = `Edit ${editing}`;
+        const nm = document.getElementById("nuName");
+        nm.value = editing; nm.disabled = true;
+        document.getElementById("nuDept").value = b.dataset.d;
+        document.getElementById("nuRole").value = b.dataset.r;
+        document.getElementById("nuPass").placeholder = "new password (leave empty to keep)";
+        document.getElementById("nuGo").textContent = "Save changes";
+        document.getElementById("nuCancel").style.display = "";
+        document.getElementById("uForm").scrollIntoView({ block: "nearest" });
+      }));
+      pane.querySelectorAll(".uDel").forEach(b => b.addEventListener("click", async () => {
+        if (!window.confirm(`Delete user '${b.dataset.u}'? Their audit history stays in the signed log.`)) return;
+        const r = await post("/user_delete", { user: b.dataset.u });
+        if (!r.ok) { toast(r.error, true); return; }
+        toast("user deleted");
+        window.renderTeamPage();
+      }));
+      pane.querySelector("#nrGo").addEventListener("click", async () => {
+        const r = await post("/role_create", { name: document.getElementById("nrName").value.trim(),
+          base: document.getElementById("nrBase").value,
+          manage_users: document.getElementById("nrMgr").checked ? "true" : "false" });
+        if (!r.ok) { toast(r.error, true); return; }
+        toast("role created");
+        window.renderTeamPage();
+      });
+      pane.querySelectorAll(".rDel").forEach(b => b.addEventListener("click", async () => {
+        const r = await post("/role_delete", { name: b.dataset.r });
+        if (!r.ok) { toast(r.error, true); return; }
+        toast("role deleted");
+        window.renderTeamPage();
+      }));
+    }
     pane.querySelectorAll(".mint").forEach(btn => btn.addEventListener("click", async () => {
       const r = await post("/mint", { user: btn.dataset.u });
       document.getElementById("mintOut").innerHTML = r.ok
@@ -2405,7 +2519,32 @@ if (SERVER) {
   const mi = await (await fetch(SERVER + "/models?token=" + encodeURIComponent(TOKEN))).json();
   if (!mi.ok) { setErr(mi.error || "cannot reach server"); throw new Error("boot failed"); }
   ME = mi.me;
-  whoBox.innerHTML = `<b>${ME.user}</b>${ME.dept} · ${ME.role}${mi.version ? " · v" + mi.version : ""}`;
+  whoBox.innerHTML = `<b>${ME.user}</b>${ME.dept} · ${ME.roleName || ME.role}${mi.version ? " · v" + mi.version : ""}`;
+  if (ME.mustChange) {
+    // Administrator-set passwords must be replaced before working.
+    const gate = document.createElement("div");
+    gate.id = "landing";
+    gate.innerHTML = `<div class="card"><h2>Set a new password</h2>
+      <p>Your password was set by an administrator — choose your own before continuing.</p>
+      <form id="pwForm" autocomplete="off">
+        <input id="pwOld" type="password" placeholder="current password">
+        <input id="pwNew" type="password" placeholder="new password (min 8 characters)" style="margin-top:.4rem">
+        <input id="pwNew2" type="password" placeholder="repeat new password" style="margin-top:.4rem">
+        <button type="submit">Save &amp; continue</button>
+      </form><p id="pwErr" style="color:var(--bad)"></p></div>`;
+    document.body.appendChild(gate);
+    gate.querySelector("#pwForm").addEventListener("submit", async e => {
+      e.preventDefault();
+      const [o, n, n2] = ["pwOld", "pwNew", "pwNew2"].map(i => document.getElementById(i).value);
+      if (n !== n2) { document.getElementById("pwErr").textContent = "the new passwords do not match"; return; }
+      const r = await fetch(SERVER + "/password", { method: "POST",
+        body: JSON.stringify({ token: TOKEN, old: o, new: n }) }).then(x => x.json());
+      if (!r.ok) { document.getElementById("pwErr").textContent = r.error; return; }
+      ME.mustChange = false;
+      gate.remove();
+      toast("password updated");
+    });
+  }
   if (PAGE === "team") window.renderTeamPage();
   const msel0 = document.getElementById("modelSel");
   msel0.innerHTML = "";
